@@ -47,3 +47,10 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Discord bot (Python)
+discord-bot/data/
+discord-bot/__pycache__/
+discord-bot/**/__pycache__/
+.pythonlibs/
+uv.lock
