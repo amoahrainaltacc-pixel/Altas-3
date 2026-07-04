@@ -79,10 +79,11 @@ class Leveling(commands.Cog, name="leveling"):
         needed = xp_for_level(row["level"])
         bar = progress_bar(row["xp"], needed)
         embed = base_embed(
-            f"{member.display_name}'s Rank",
+            f"📊 {member.display_name}'s Rank",
             f"**Level:** {row['level']}\n**XP:** {row['xp']} / {needed}\n{bar}",
             config.COLOR_PRIMARY,
             ctx.prefix,
+            ctx.guild,
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
@@ -98,7 +99,10 @@ class Leveling(commands.Cog, name="leveling"):
             await ctx.send(embed=error_embed("No leveling data yet."))
             return
         lines = [f"**#{i+1}** <@{r['user_id']}> — Level {r['level']} ({r['xp']} XP)" for i, r in enumerate(rows)]
-        await ctx.send(embed=base_embed("📈 XP Leaderboard", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix))
+        embed = base_embed("📈 XP Leaderboard", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.url)
+        await ctx.send(embed=embed)
 
     @commands.command(help="Set a member's XP")
     @checks.can_manage_guild()

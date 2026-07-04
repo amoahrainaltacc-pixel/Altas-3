@@ -52,7 +52,9 @@ class Administration(commands.Cog, name="administration"):
     @checks.can_manage_guild()
     async def config(self, ctx: commands.Context):
         row = await get_guild_config(ctx.guild.id)
-        embed = base_embed("⚙️ Server Configuration", color=config.COLOR_PRIMARY, prefix=row["prefix"])
+        embed = base_embed("⚙️ Server Configuration", color=config.COLOR_PRIMARY, prefix=row["prefix"], guild=ctx.guild)
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.with_size(512).url)
         embed.add_field(name="Prefix", value=f"`{row['prefix']}`", inline=True)
         embed.add_field(name="Autorole", value=f"<@&{row['autorole_id']}>" if row["autorole_id"] else "Not set", inline=True)
         embed.add_field(name="Mod Log", value=f"<#{row['mod_log_channel']}>" if row["mod_log_channel"] else "Not set", inline=True)

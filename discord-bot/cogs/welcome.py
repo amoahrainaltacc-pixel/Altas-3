@@ -61,14 +61,14 @@ class Welcome(commands.Cog, name="welcome"):
     async def previewwelcome(self, ctx: commands.Context):
         row = await get_guild_config(ctx.guild.id)
         template = row["welcome_message"] or "Welcome {user} to {server}!"
-        embed = base_embed("👋 Welcome!", _format_message(template, ctx.author), config.COLOR_SUCCESS, ctx.prefix)
+        embed = base_embed("👋 Welcome!", _format_message(template, ctx.author), config.COLOR_SUCCESS, ctx.prefix, ctx.guild)
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
     @commands.command(help="Preview a card-style welcome embed")
     async def welcomecard(self, ctx: commands.Context, member: discord.Member | None = None):
         member = member or ctx.author
-        embed = base_embed(f"Welcome to {ctx.guild.name}!", f"{member.mention} just joined.\nMember #{ctx.guild.member_count}", config.COLOR_SUCCESS, ctx.prefix)
+        embed = base_embed(f"Welcome to {ctx.guild.name}!", f"{member.mention} just joined.\nMember #{ctx.guild.member_count}", config.COLOR_SUCCESS, ctx.prefix, ctx.guild)
         embed.set_thumbnail(url=member.display_avatar.url)
         if ctx.guild.banner:
             embed.set_image(url=ctx.guild.banner.url)
@@ -77,7 +77,9 @@ class Welcome(commands.Cog, name="welcome"):
     @commands.hybrid_command(help="Post a verification panel with a button")
     @checks.can_manage_guild()
     async def verifypanel(self, ctx: commands.Context):
-        embed = base_embed("✅ Verification", "Click the button below to verify and gain access to the server.", config.COLOR_PRIMARY, ctx.prefix)
+        embed = base_embed("✅ Verification", "Click the button below to verify and gain access to the server.", config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.url)
         await ctx.send(embed=embed, view=VerifyView())
 
     @commands.Cog.listener()
@@ -87,7 +89,7 @@ class Welcome(commands.Cog, name="welcome"):
             channel = member.guild.get_channel(row["welcome_channel"])
             if channel:
                 template = row["welcome_message"] or "Welcome {user} to {server}!"
-                embed = base_embed("👋 Welcome!", _format_message(template, member), config.COLOR_SUCCESS)
+                embed = base_embed("👋 Welcome!", _format_message(template, member), config.COLOR_SUCCESS, guild=member.guild)
                 embed.set_thumbnail(url=member.display_avatar.url)
                 try:
                     await channel.send(embed=embed)

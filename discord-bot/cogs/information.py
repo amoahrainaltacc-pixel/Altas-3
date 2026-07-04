@@ -48,11 +48,14 @@ class Information(commands.Cog, name="information"):
     async def boosts(self, ctx: commands.Context):
         guild = ctx.guild
         embed = base_embed(
-            "Server Boosts",
+            "💎 Server Boosts",
             f"**Boosts:** {guild.premium_subscription_count}\n**Tier:** {guild.premium_tier}",
             config.COLOR_PRIMARY,
             ctx.prefix,
+            guild,
         )
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.with_size(512).url)
         await ctx.send(embed=embed)
 
     @commands.command(help="List everyone boosting the server")
@@ -68,8 +71,9 @@ class Information(commands.Cog, name="information"):
         if not ctx.guild.icon:
             await ctx.send(embed=error_embed("This server has no icon."))
             return
-        embed = base_embed(f"{ctx.guild.name}'s Icon", color=config.COLOR_PRIMARY, prefix=ctx.prefix)
+        embed = base_embed(f"🖼️ {ctx.guild.name}'s Icon", color=config.COLOR_PRIMARY, prefix=ctx.prefix, guild=ctx.guild)
         embed.set_image(url=ctx.guild.icon.with_size(1024).url)
+        embed.set_thumbnail(url=ctx.guild.icon.with_size(256).url)
         await ctx.send(embed=embed)
 
     @commands.command(help="Show the server banner")

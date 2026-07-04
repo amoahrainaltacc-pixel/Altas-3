@@ -40,7 +40,7 @@ class Utility(commands.Cog, name="utility"):
     async def userinfo(self, ctx: commands.Context, member: discord.Member | None = None):
         member = member or ctx.author
         roles = [r.mention for r in reversed(member.roles) if r.name != "@everyone"]
-        embed = base_embed(f"{member}", color=config.COLOR_PRIMARY, prefix=ctx.prefix)
+        embed = base_embed(f"{member}", color=config.COLOR_PRIMARY, prefix=ctx.prefix, guild=ctx.guild)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="ID", value=member.id, inline=True)
         embed.add_field(name="Nickname", value=member.nick or "None", inline=True)
@@ -54,9 +54,11 @@ class Utility(commands.Cog, name="utility"):
     @commands.hybrid_command(help="Show info about this server")
     async def serverinfo(self, ctx: commands.Context):
         guild = ctx.guild
-        embed = base_embed(guild.name, color=config.COLOR_PRIMARY, prefix=ctx.prefix)
+        embed = base_embed(f"🏰 {guild.name}", color=config.COLOR_PRIMARY, prefix=ctx.prefix, guild=guild)
         if guild.icon:
-            embed.set_thumbnail(url=guild.icon.url)
+            embed.set_thumbnail(url=guild.icon.with_size(512).url)
+        if guild.banner:
+            embed.set_image(url=guild.banner.url)
         embed.add_field(name="Owner", value=f"<@{guild.owner_id}>", inline=True)
         embed.add_field(name="Members", value=guild.member_count, inline=True)
         embed.add_field(name="Created", value=discord.utils.format_dt(guild.created_at, "R"), inline=True)
@@ -99,7 +101,8 @@ class Utility(commands.Cog, name="utility"):
 
     @commands.hybrid_command(help="Show info about Atlas")
     async def botinfo(self, ctx: commands.Context):
-        embed = base_embed("Atlas", "A modern moderation & utility bot.", config.COLOR_PRIMARY, ctx.prefix)
+        embed = base_embed("🤖 Atlas", "A modern moderation & utility bot.", config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        embed.set_thumbnail(url=self.bot.user.display_avatar.url)
         embed.add_field(name="Servers", value=len(self.bot.guilds), inline=True)
         embed.add_field(name="Users", value=sum(g.member_count for g in self.bot.guilds), inline=True)
         embed.add_field(name="Latency", value=f"{round(self.bot.latency * 1000)}ms", inline=True)
@@ -110,14 +113,14 @@ class Utility(commands.Cog, name="utility"):
     @commands.hybrid_command(help="Check the bot's latency")
     async def ping(self, ctx: commands.Context):
         start = time.perf_counter()
-        message = await ctx.send(embed=info_embed("Pinging…"))
+        message = await ctx.send(embed=info_embed("Pinging…", "Ping", ctx.prefix, ctx.guild))
         elapsed = (time.perf_counter() - start) * 1000
-        embed = success_embed(f"**Message:** {elapsed:.0f}ms\n**Websocket:** {round(self.bot.latency * 1000)}ms", "Pong! 🏓")
+        embed = success_embed(f"**Message:** {elapsed:.0f}ms\n**Websocket:** {round(self.bot.latency * 1000)}ms", "Pong! 🏓", ctx.prefix, ctx.guild)
         await message.edit(embed=embed)
 
     @commands.hybrid_command(help="Show how long Atlas has been running")
     async def uptime(self, ctx: commands.Context):
-        await ctx.send(embed=info_embed(human_duration(time.time() - self.bot.start_time), "Uptime"))
+        await ctx.send(embed=info_embed(human_duration(time.time() - self.bot.start_time), "Uptime", ctx.prefix, ctx.guild))
 
     @commands.hybrid_command(help="Get Atlas's invite link")
     async def invite(self, ctx: commands.Context):

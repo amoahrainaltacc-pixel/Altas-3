@@ -1,4 +1,4 @@
- """
+"""
 Atlas — Discord moderation & utility bot.
 Entry point: loads config, initializes the database, boots all cogs, and starts the bot.
 """

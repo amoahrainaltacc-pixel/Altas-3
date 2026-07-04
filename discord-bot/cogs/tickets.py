@@ -59,7 +59,9 @@ class Tickets(commands.Cog, name="tickets"):
     @commands.hybrid_command(help="Post the ticket-creation panel in this channel")
     @checks.can_manage_channels()
     async def ticketpanel(self, ctx: commands.Context):
-        embed = base_embed("🎫 Support", "Click the button below to open a support ticket.", config.COLOR_PRIMARY, ctx.prefix)
+        embed = base_embed("🎫 Support", "Click the button below to open a support ticket.", config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.url)
         await ctx.send(embed=embed, view=TicketPanelView())
         conn = get_conn()
         await self._config(ctx.guild.id)

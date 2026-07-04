@@ -43,7 +43,8 @@ class Economy(commands.Cog, name="economy"):
     async def balance(self, ctx: commands.Context, member: discord.Member | None = None):
         member = member or ctx.author
         row = await self._account(ctx.guild.id, member.id)
-        embed = base_embed(f"{member.display_name}'s Wallet", f"💵 **Cash:** {row['balance']}\n🏦 **Bank:** {row['bank']}", config.COLOR_PRIMARY, ctx.prefix)
+        embed = base_embed(f"💰 {member.display_name}'s Wallet", f"💵 **Cash:** {row['balance']}\n🏦 **Bank:** {row['bank']}", config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(help="Claim your daily reward")
@@ -181,7 +182,10 @@ class Economy(commands.Cog, name="economy"):
             await ctx.send(embed=error_embed("No economy data yet."))
             return
         lines = [f"**#{i+1}** <@{r['user_id']}> — {r['balance'] + r['bank']} coins" for i, r in enumerate(rows)]
-        await ctx.send(embed=base_embed("💰 Wealth Leaderboard", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix))
+        embed = base_embed("💰 Wealth Leaderboard", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.url)
+        await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):

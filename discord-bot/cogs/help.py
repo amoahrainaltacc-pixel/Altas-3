@@ -26,10 +26,11 @@ CATEGORY_META = {
 
 
 class HelpSelect(discord.ui.Select):
-    def __init__(self, bot: commands.Bot, author_id: int, prefix: str):
+    def __init__(self, bot: commands.Bot, author_id: int, prefix: str, guild: discord.Guild | None):
         self.bot = bot
         self.author_id = author_id
         self.prefix = prefix
+        self.guild = guild
         options = [
             discord.SelectOption(label="Home", emoji="🏠", value="home", description="Back to the overview")
         ]
@@ -45,25 +46,25 @@ class HelpSelect(discord.ui.Select):
             return
         value = self.values[0]
         if value == "home":
-            embed = build_home_embed(self.bot, self.prefix)
+            embed = build_home_embed(self.bot, self.prefix, self.guild)
             await interaction.response.edit_message(embed=embed, view=self.view)
             return
         cog = self.bot.get_cog(value)
-        embed = build_category_embed(cog, self.prefix)
+        embed = build_category_embed(cog, self.prefix, self.guild)
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 
 class HelpView(discord.ui.View):
-    def __init__(self, bot: commands.Bot, author_id: int, prefix: str):
+    def __init__(self, bot: commands.Bot, author_id: int, prefix: str, guild: discord.Guild | None = None):
         super().__init__(timeout=120)
-        self.add_item(HelpSelect(bot, author_id, prefix))
+        self.add_item(HelpSelect(bot, author_id, prefix, guild))
 
     async def on_timeout(self) -> None:
         for item in self.children:
             item.disabled = True
 
 
-def build_home_embed(bot: commands.Bot, prefix: str) -> discord.Embed:
+def build_home_embed(bot: commands.Bot, prefix: str, guild: discord.Guild | None = None) -> discord.Embed:
     embed = base_embed(
         f"{config.EMOJI_INFO} Atlas Help Menu",
         (
@@ -76,14 +77,20 @@ def build_home_embed(bot: commands.Bot, prefix: str) -> discord.Embed:
         ),
         config.COLOR_PRIMARY,
         prefix,
+        guild,
     )
-    embed.set_footer(text=f"Atlas • Prefix: {prefix} • {sum(1 for c in bot.commands)} commands loaded")
+    if guild and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(
+        text=f"{guild.name if guild else 'Atlas'} • Prefix: {prefix} • {sum(1 for c in bot.commands)} commands loaded",
+        icon_url=guild.icon.url if guild and guild.icon else None,
+    )
     return embed
 
 
-def build_category_embed(cog: commands.Cog, prefix: str) -> discord.Embed:
+def build_category_embed(cog: commands.Cog, prefix: str, guild: discord.Guild | None = None) -> discord.Embed:
     if cog is None:
-        return base_embed("Category not found", "Try another category.", config.COLOR_ERROR, prefix)
+        return base_embed("Category not found", "Try another category.", config.COLOR_ERROR, prefix, guild)
     commands_list = sorted(cog.get_commands(), key=lambda c: c.name)
     lines = []
     for cmd in commands_list:
@@ -95,7 +102,10 @@ def build_category_embed(cog: commands.Cog, prefix: str) -> discord.Embed:
         "\n".join(lines) if lines else "No commands in this category yet.",
         config.COLOR_PRIMARY,
         prefix,
+        guild,
     )
+    if guild and guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
     return embed
 
 
@@ -111,13 +121,14 @@ class Help(commands.Cog, name="help"):
         if command:
             cmd = self.bot.get_command(command)
             if not cmd:
-                await ctx.send(embed=base_embed("Not Found", f"No command called `{command}`.", config.COLOR_ERROR, prefix))
+                await ctx.send(embed=base_embed("Not Found", f"No command called `{command}`.", config.COLOR_ERROR, prefix, ctx.guild))
                 return
             embed = base_embed(
                 f"{config.EMOJI_INFO} {prefix}{cmd.qualified_name}",
                 cmd.help or cmd.short_doc or "No description provided.",
                 config.COLOR_PRIMARY,
                 prefix,
+                ctx.guild,
             )
             usage = f"{prefix}{cmd.qualified_name} {cmd.signature}".strip()
             embed.add_field(name="Usage", value=f"`{usage}`", inline=False)
@@ -126,8 +137,8 @@ class Help(commands.Cog, name="help"):
             await ctx.send(embed=embed)
             return
 
-        embed = build_home_embed(self.bot, prefix)
-        view = HelpView(self.bot, ctx.author.id, prefix)
+        embed = build_home_embed(self.bot, prefix, ctx.guild)
+        view = HelpView(self.bot, ctx.author.id, prefix, ctx.guild)
         await ctx.send(embed=embed, view=view)
 
 

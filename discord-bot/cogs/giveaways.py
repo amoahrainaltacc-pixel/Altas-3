@@ -94,7 +94,9 @@ class Giveaways(commands.Cog, name="giveaways"):
         if seconds is None:
             await ctx.send(embed=error_embed("Invalid duration. Use formats like `10m`, `1h`, `1d`."))
             return
-        embed = base_embed("🎉 Giveaway", f"**Prize:** {prize}\n**Winners:** {winners}\n**Ends:** {discord.utils.format_dt(discord.utils.utcnow() + __import__('datetime').timedelta(seconds=seconds), 'R')}", config.COLOR_PRIMARY)
+        embed = base_embed("🎉 Giveaway", f"**Prize:** {prize}\n**Winners:** {winners}\n**Ends:** {discord.utils.format_dt(discord.utils.utcnow() + __import__('datetime').timedelta(seconds=seconds), 'R')}", config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.url)
         conn = get_conn()
         cur = await conn.execute(
             "INSERT INTO giveaways (guild_id, channel_id, prize, winners, host_id, end_time) VALUES (?, ?, ?, ?, ?, ?)",
