@@ -171,6 +171,102 @@ class Economy(commands.Cog, name="economy"):
         await conn.commit()
         await ctx.send(embed=success_embed(f"Sold **{item.replace('_', ' ')}** for **{refund}** coins."))
 
+    @commands.command(help="Show your total net worth (cash + bank)")
+    async def networth(self, ctx: commands.Context, member: discord.Member | None = None):
+        member = member or ctx.author
+        row = await self._account(ctx.guild.id, member.id)
+        total = row["balance"] + row["bank"]
+        await ctx.send(embed=base_embed(f"💎 {member.display_name}'s Net Worth", f"**Total:** {total} coins", config.COLOR_PRIMARY, ctx.prefix, ctx.guild))
+
+    @commands.command(help="Give coins to another member")
+    async def give(self, ctx: commands.Context, member: discord.Member, amount: int):
+        if member.id == ctx.author.id:
+            await ctx.send(embed=error_embed("You can't give coins to yourself."))
+            return
+        if amount <= 0:
+            await ctx.send(embed=error_embed("Amount must be positive."))
+            return
+        actor = await self._account(ctx.guild.id, ctx.author.id)
+        if actor["balance"] < amount:
+            await ctx.send(embed=error_embed("You don't have enough coins."))
+            return
+        await self._account(ctx.guild.id, member.id)
+        conn = get_conn()
+        await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
+        await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, member.id))
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"You gave **{amount}** coins to **{member}**."))
+
+    @commands.command(help="Flip a coin and bet coins on the outcome")
+    async def coinbet(self, ctx: commands.Context, amount: int, side: str = "heads"):
+        side = side.lower()
+        if side not in ("heads", "tails"):
+            await ctx.send(embed=error_embed("Choose `heads` or `tails`."))
+            return
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        if amount <= 0 or amount > row["balance"]:
+            await ctx.send(embed=error_embed("Invalid bet amount."))
+            return
+        result = random.choice(["heads", "tails"])
+        conn = get_conn()
+        if result == side:
+            await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=success_embed(f"It landed on **{result}**! You won **{amount}** coins."))
+        else:
+            await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=error_embed(f"It landed on **{result}**. You lost **{amount}** coins."))
+
+    @commands.command(help="Roll dice and bet coins — high roll wins double")
+    async def gamble(self, ctx: commands.Context, amount: int):
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        if amount <= 0 or amount > row["balance"]:
+            await ctx.send(embed=error_embed("Invalid bet amount."))
+            return
+        player_roll = random.randint(1, 6)
+        house_roll = random.randint(1, 6)
+        conn = get_conn()
+        if player_roll > house_roll:
+            await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=success_embed(f"You rolled **{player_roll}** vs house's **{house_roll}** — you won **{amount}** coins!"))
+        elif player_roll < house_roll:
+            await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=error_embed(f"You rolled **{player_roll}** vs house's **{house_roll}** — you lost **{amount}** coins."))
+        else:
+            await ctx.send(embed=info_embed(f"You both rolled **{player_roll}** — it's a tie, no coins lost."))
+
+    @commands.command(help="Reset a member's balance to the starting amount (admin only)")
+    @commands.has_permissions(manage_guild=True)
+    async def resetbalance(self, ctx: commands.Context, member: discord.Member):
+        conn = get_conn()
+        await conn.execute(
+            "UPDATE economy SET balance = ?, bank = 0 WHERE guild_id = ? AND user_id = ?",
+            (config.STARTING_BALANCE, ctx.guild.id, member.id),
+        )
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"Reset **{member}**'s balance."))
+
+    @commands.command(help="Add coins to a member's balance (admin only)")
+    @commands.has_permissions(manage_guild=True)
+    async def addmoney(self, ctx: commands.Context, member: discord.Member, amount: int):
+        await self._account(ctx.guild.id, member.id)
+        conn = get_conn()
+        await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, member.id))
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"Added **{amount}** coins to **{member}**."))
+
+    @commands.command(help="Remove coins from a member's balance (admin only)")
+    @commands.has_permissions(manage_guild=True)
+    async def removemoney(self, ctx: commands.Context, member: discord.Member, amount: int):
+        await self._account(ctx.guild.id, member.id)
+        conn = get_conn()
+        await conn.execute("UPDATE economy SET balance = MAX(balance - ?, 0) WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, member.id))
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"Removed **{amount}** coins from **{member}**."))
+
     @commands.hybrid_command(help="Show the richest members in this server")
     async def leaderboard(self, ctx: commands.Context):
         conn = get_conn()

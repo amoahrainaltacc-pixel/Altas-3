@@ -114,6 +114,56 @@ class Information(commands.Cog, name="information"):
             return
         await ctx.send(embed=error_embed("Couldn't find the first message."))
 
+    @commands.command(help="List all text channels in the server")
+    async def channellist(self, ctx: commands.Context):
+        channels = [c.mention for c in ctx.guild.text_channels]
+        await ctx.send(embed=base_embed(f"Text Channels ({len(channels)})", "\n".join(channels[:40]) or "None", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="List all voice channels in the server")
+    async def voicechannellist(self, ctx: commands.Context):
+        channels = [c.name for c in ctx.guild.voice_channels]
+        await ctx.send(embed=base_embed(f"Voice Channels ({len(channels)})", "\n".join(channels[:40]) or "None", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="List all bots in the server")
+    async def botlist(self, ctx: commands.Context):
+        bots = [m.mention for m in ctx.guild.members if m.bot]
+        if not bots:
+            await ctx.send(embed=error_embed("This server has no bots."))
+            return
+        await ctx.send(embed=base_embed(f"Bots ({len(bots)})", "\n".join(bots[:40]), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show the oldest Discord accounts in this server")
+    async def oldestaccounts(self, ctx: commands.Context):
+        members = sorted((m for m in ctx.guild.members if not m.bot), key=lambda m: m.created_at)[:10]
+        lines = [f"**{i+1}.** {m.mention} — {discord.utils.format_dt(m.created_at, 'D')}" for i, m in enumerate(members)]
+        await ctx.send(embed=base_embed("👴 Oldest Accounts", "\n".join(lines) or "None", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show the newest members to join this server")
+    async def newestmembers(self, ctx: commands.Context):
+        members = sorted((m for m in ctx.guild.members if not m.bot and m.joined_at), key=lambda m: m.joined_at, reverse=True)[:10]
+        lines = [f"**{i+1}.** {m.mention} — joined {discord.utils.format_dt(m.joined_at, 'R')}" for i, m in enumerate(members)]
+        await ctx.send(embed=base_embed("🆕 Newest Members", "\n".join(lines) or "None", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Count the number of categories in the server")
+    async def categorycount(self, ctx: commands.Context):
+        await ctx.send(embed=base_embed("Category Count", str(len(ctx.guild.categories)), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show the server's AFK channel/timeout settings")
+    async def afkinfo(self, ctx: commands.Context):
+        guild = ctx.guild
+        channel = guild.afk_channel.mention if guild.afk_channel else "None"
+        await ctx.send(embed=base_embed("💤 AFK Settings", f"**Channel:** {channel}\n**Timeout:** {guild.afk_timeout // 60} minutes", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show a member's join position in the server")
+    async def joinposition(self, ctx: commands.Context, member: discord.Member | None = None):
+        member = member or ctx.author
+        members = sorted((m for m in ctx.guild.members if m.joined_at), key=lambda m: m.joined_at)
+        try:
+            position = members.index(member) + 1
+        except ValueError:
+            position = "Unknown"
+        await ctx.send(embed=base_embed(f"{member.display_name}'s Join Position", f"**#{position}** out of {len(members)}", config.COLOR_PRIMARY, ctx.prefix))
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Information(bot))

@@ -104,7 +104,9 @@ CREATE TABLE IF NOT EXISTS tickets (
     owner_id INTEGER,
     claimed_by INTEGER,
     status TEXT DEFAULT 'open',
-    created_at INTEGER
+    reason TEXT,
+    created_at INTEGER,
+    closed_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS ticket_config (
@@ -112,6 +114,7 @@ CREATE TABLE IF NOT EXISTS ticket_config (
     category_id INTEGER,
     support_role_id INTEGER,
     panel_channel_id INTEGER,
+    log_channel_id INTEGER,
     counter INTEGER DEFAULT 0
 );
 
@@ -182,11 +185,18 @@ async def init_db() -> None:
     await _conn.commit()
     # Lightweight migration for columns added after initial release —
     # CREATE TABLE IF NOT EXISTS won't add new columns to an existing table.
-    try:
-        await _conn.execute("ALTER TABLE guild_config ADD COLUMN language TEXT DEFAULT 'en'")
-        await _conn.commit()
-    except Exception:
-        pass
+    migrations = [
+        "ALTER TABLE guild_config ADD COLUMN language TEXT DEFAULT 'en'",
+        "ALTER TABLE tickets ADD COLUMN reason TEXT",
+        "ALTER TABLE tickets ADD COLUMN closed_at INTEGER",
+        "ALTER TABLE ticket_config ADD COLUMN log_channel_id INTEGER",
+    ]
+    for stmt in migrations:
+        try:
+            await _conn.execute(stmt)
+            await _conn.commit()
+        except Exception:
+            pass
 
 
 def get_conn() -> aiosqlite.Connection:

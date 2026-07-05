@@ -4,6 +4,9 @@ General utility commands: info lookups, ping/stats, reminders, todos, AFK, calcu
 
 import time
 import asyncio
+import base64
+import hashlib
+import datetime
 import discord
 from discord.ext import commands
 
@@ -225,6 +228,94 @@ class Utility(commands.Cog, name="utility"):
         )
         await conn.commit()
         await ctx.send(embed=success_embed(f"You're now AFK: {reason}"))
+
+    @commands.command(help="Encode text to Base64")
+    async def base64encode(self, ctx: commands.Context, *, text: str):
+        encoded = base64.b64encode(text.encode()).decode()
+        await ctx.send(embed=base_embed("🔐 Base64 Encode", f"```{encoded}```", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Decode Base64 text")
+    async def base64decode(self, ctx: commands.Context, *, text: str):
+        try:
+            decoded = base64.b64decode(text.encode()).decode()
+        except Exception:
+            await ctx.send(embed=error_embed("That doesn't look like valid Base64."))
+            return
+        await ctx.send(embed=base_embed("🔓 Base64 Decode", f"```{decoded}```", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get the SHA-256 hash of some text")
+    async def sha256(self, ctx: commands.Context, *, text: str):
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        await ctx.send(embed=base_embed("🔑 SHA-256", f"```{digest}```", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get the MD5 hash of some text")
+    async def md5(self, ctx: commands.Context, *, text: str):
+        digest = hashlib.md5(text.encode()).hexdigest()
+        await ctx.send(embed=base_embed("🔑 MD5", f"```{digest}```", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show the current Unix timestamp")
+    async def timestamp(self, ctx: commands.Context):
+        ts = int(time.time())
+        await ctx.send(embed=base_embed("🕒 Timestamp", f"**Unix:** {ts}\n**Formatted:** {discord.utils.format_dt(datetime.datetime.now(datetime.timezone.utc), 'F')}", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Decode info from a Discord snowflake ID")
+    async def snowflake(self, ctx: commands.Context, snowflake_id: int):
+        try:
+            created = discord.utils.snowflake_time(snowflake_id)
+        except Exception:
+            await ctx.send(embed=error_embed("That doesn't look like a valid snowflake ID."))
+            return
+        await ctx.send(embed=base_embed("❄️ Snowflake Info", f"**ID:** {snowflake_id}\n**Created:** {discord.utils.format_dt(created, 'F')} ({discord.utils.format_dt(created, 'R')})", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Preview a hex color code")
+    async def color(self, ctx: commands.Context, hex_code: str):
+        hex_code = hex_code.lstrip("#")
+        try:
+            value = int(hex_code, 16)
+        except ValueError:
+            await ctx.send(embed=error_embed("Give me a valid hex color, e.g. `#5865F2`."))
+            return
+        embed = base_embed(f"🎨 #{hex_code.upper()}", f"**RGB:** {tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))}", value, ctx.prefix)
+        await ctx.send(embed=embed)
+
+    @commands.command(help="Count the words and characters in a message")
+    async def wordcount(self, ctx: commands.Context, *, text: str):
+        words = len(text.split())
+        chars = len(text)
+        await ctx.send(embed=base_embed("📝 Word Count", f"**Words:** {words}\n**Characters:** {chars}", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show how long ago (or from now) a date is, e.g. 2024-01-01")
+    async def countdown(self, ctx: commands.Context, date: str):
+        try:
+            target = datetime.datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            await ctx.send(embed=error_embed("Use the format `YYYY-MM-DD`."))
+            return
+        await ctx.send(embed=base_embed("📅 Countdown", discord.utils.format_dt(target, "R"), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show the number of members currently online in this server")
+    async def onlinecount(self, ctx: commands.Context):
+        online = sum(1 for m in ctx.guild.members if m.status != discord.Status.offline)
+        await ctx.send(embed=info_embed(f"**{online}** member(s) are currently online.", "Online Count", ctx.prefix, ctx.guild))
+
+    @commands.command(help="Get a shareable jump link to a message by ID")
+    async def jumpto(self, ctx: commands.Context, message_id: int):
+        try:
+            message = await ctx.channel.fetch_message(message_id)
+        except discord.NotFound:
+            await ctx.send(embed=error_embed("Couldn't find that message in this channel."))
+            return
+        await ctx.send(embed=base_embed("🔗 Jump Link", f"[Click here to jump]({message.jump_url})", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Show your personal profile picture banner colour")
+    async def accentcolor(self, ctx: commands.Context, member: discord.Member | None = None):
+        member = member or ctx.author
+        user = await self.bot.fetch_user(member.id)
+        color = user.accent_color
+        if not color:
+            await ctx.send(embed=info_embed(f"**{member}** has no custom accent color set."))
+            return
+        await ctx.send(embed=base_embed(f"{member}'s Accent Color", f"**Hex:** {color}", color.value, ctx.prefix))
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):

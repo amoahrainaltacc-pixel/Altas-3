@@ -35,7 +35,7 @@ EMOJI_BULLET = "▸"
 # --- Misc ---
 SUPPORT_URL = "https://discord.com"
 GITHUB_URL = "https://github.com"
-WEBSITE_URL = "https://discord.com"
+WEBSITE_URL = "https://atlas-bot.base44.app"
 
 # XP / Leveling
 XP_MIN_PER_MESSAGE = 15

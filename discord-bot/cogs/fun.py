@@ -9,6 +9,56 @@ from discord.ext import commands
 import config
 from utils.embeds import base_embed, info_embed
 
+COMPLIMENTS = [
+    "You light up every room you walk into.",
+    "Your ideas are genuinely brilliant.",
+    "You make hard things look easy.",
+    "You have the best laugh in the server.",
+    "You're more talented than you realize.",
+]
+
+INSULTS_LIGHT = [
+    "You have the charisma of a wet sock.",
+    "You're about as sharp as a marble.",
+    "Even autocorrect gave up on you.",
+    "You're proof that evolution can go backwards.",
+]
+
+FACTS = [
+    "Honey never spoils — archaeologists have found 3000-year-old honey that's still edible.",
+    "Bananas are berries, but strawberries aren't.",
+    "A day on Venus is longer than a year on Venus.",
+    "Octopuses have three hearts.",
+    "Sharks existed before trees did.",
+    "The Eiffel Tower can grow taller in summer due to heat expansion.",
+]
+
+QUOTES = [
+    "\"The only way to do great work is to love what you do.\" — Steve Jobs",
+    "\"In the middle of difficulty lies opportunity.\" — Albert Einstein",
+    "\"It always seems impossible until it's done.\" — Nelson Mandela",
+    "\"Success is not final, failure is not fatal.\" — Winston Churchill",
+]
+
+PICKUP_LINES = [
+    "Are you a parking ticket? Because you've got FINE written all over you.",
+    "Do you have a map? I keep getting lost in your eyes.",
+    "Is your name Google? Because you have everything I've been searching for.",
+]
+
+NEVER_HAVE_I_EVER = [
+    "Never have I ever pretended to be sick to skip something.",
+    "Never have I ever sent a text to the wrong person.",
+    "Never have I ever laughed so hard I cried.",
+    "Never have I ever forgotten someone's name right after meeting them.",
+]
+
+RIDDLES = [
+    ("What has to be broken before you can use it?", "an egg"),
+    ("I speak without a mouth and hear without ears. What am I?", "an echo"),
+    ("The more you take, the more you leave behind. What am I?", "footsteps"),
+]
+
 EIGHT_BALL_RESPONSES = [
     "It is certain.", "Without a doubt.", "Yes, definitely.", "You may rely on it.",
     "As I see it, yes.", "Most likely.", "Outlook good.", "Signs point to yes.",
@@ -210,6 +260,108 @@ class Fun(commands.Cog, name="fun"):
     @commands.command(help="Get a random fox picture")
     async def fox(self, ctx: commands.Context):
         await self._animal(ctx, "fox")
+
+    @commands.command(help="Give a member a genuine compliment")
+    async def compliment(self, ctx: commands.Context, member: discord.Member | None = None):
+        member = member or ctx.author
+        await ctx.send(embed=base_embed("💖 Compliment", f"{member.mention}, {random.choice(COMPLIMENTS)}", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Playfully insult a member (all in good fun)")
+    async def insult(self, ctx: commands.Context, member: discord.Member | None = None):
+        member = member or ctx.author
+        await ctx.send(embed=base_embed("😂 Insult", f"{member.mention}, {random.choice(INSULTS_LIGHT)}", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get a random fun fact")
+    async def fact(self, ctx: commands.Context):
+        await ctx.send(embed=base_embed("🧠 Fun Fact", random.choice(FACTS), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get an inspirational quote")
+    async def quote(self, ctx: commands.Context):
+        await ctx.send(embed=base_embed("💬 Quote", random.choice(QUOTES), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get a cheesy pickup line")
+    async def pickupline(self, ctx: commands.Context):
+        await ctx.send(embed=base_embed("😏 Pickup Line", random.choice(PICKUP_LINES), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get a 'never have I ever' prompt")
+    async def neverhaveiever(self, ctx: commands.Context):
+        await ctx.send(embed=base_embed("🙊 Never Have I Ever", random.choice(NEVER_HAVE_I_EVER), config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Get a random riddle to solve")
+    async def riddle(self, ctx: commands.Context):
+        question, _ = random.choice(RIDDLES)
+        await ctx.send(embed=base_embed("❓ Riddle", question, config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Wink at a member")
+    async def wink(self, ctx: commands.Context, member: discord.Member):
+        await self._action(ctx, member, "winks at", "😉")
+
+    @commands.command(help="Cuddle a member")
+    async def cuddle(self, ctx: commands.Context, member: discord.Member):
+        await self._action(ctx, member, "cuddles", "🥰")
+
+    @commands.command(help="Poke a member")
+    async def poke(self, ctx: commands.Context, member: discord.Member):
+        await self._action(ctx, member, "pokes", "👉")
+
+    @commands.command(help="High-five a member")
+    async def highfive(self, ctx: commands.Context, member: discord.Member):
+        await self._action(ctx, member, "high-fives", "🙌")
+
+    @commands.command(help="Bonk a member")
+    async def bonk(self, ctx: commands.Context, member: discord.Member):
+        await self._action(ctx, member, "bonks", "🔨")
+
+    @commands.command(help="Bite a member")
+    async def bite(self, ctx: commands.Context, member: discord.Member):
+        await self._action(ctx, member, "bites", "😬")
+
+    @commands.command(help="Flip a table in frustration")
+    async def tableflip(self, ctx: commands.Context):
+        await ctx.send("(╯°□°）╯︵ ┻━┻")
+
+    @commands.command(help="Put the table back")
+    async def unflip(self, ctx: commands.Context):
+        await ctx.send("┬─┬ ノ( ゜-゜ノ)")
+
+    @commands.command(help="Shrug")
+    async def shrug(self, ctx: commands.Context):
+        await ctx.send("¯\\_(ツ)_/¯")
+
+    @commands.command(help="Reverse the given text")
+    async def reverse(self, ctx: commands.Context, *, text: str):
+        await ctx.send(embed=base_embed("🔁 Reversed", text[::-1], config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Convert text to mOcKiNg SpOnGeBoB case")
+    async def mock(self, ctx: commands.Context, *, text: str):
+        mocked = "".join(c.upper() if i % 2 else c.lower() for i, c in enumerate(text))
+        await ctx.send(embed=base_embed("🐸 Mock", mocked, config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Pick randomly between two or more options, comma-separated")
+    async def choose(self, ctx: commands.Context, *, options: str):
+        choices = [o.strip() for o in options.split(",") if o.strip()]
+        if len(choices) < 2:
+            await ctx.send(embed=info_embed("Give me at least two options, separated by commas."))
+            return
+        await ctx.send(embed=base_embed("🤷 I Choose", f"**{random.choice(choices)}**", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Roll a percentage chance from 0-100")
+    async def percent(self, ctx: commands.Context, *, thing: str = "this happening"):
+        await ctx.send(embed=base_embed("📊 Percent Chance", f"There's a **{random.randint(0, 100)}%** chance of {thing}.", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Generate a random number between two values")
+    async def random(self, ctx: commands.Context, low: int = 1, high: int = 100):
+        low, high = min(low, high), max(low, high)
+        await ctx.send(embed=base_embed("🎯 Random Number", f"**{random.randint(low, high)}**", config.COLOR_PRIMARY, ctx.prefix))
+
+    @commands.command(help="Spin the bottle — picks a random online member")
+    async def spinbottle(self, ctx: commands.Context):
+        candidates = [m for m in ctx.guild.members if not m.bot]
+        if not candidates:
+            await ctx.send(embed=info_embed("No one to spin the bottle on."))
+            return
+        chosen = random.choice(candidates)
+        await ctx.send(embed=base_embed("🍾 Spin the Bottle", f"The bottle landed on {chosen.mention}!", config.COLOR_PRIMARY, ctx.prefix))
 
 
 async def setup(bot: commands.Bot):
