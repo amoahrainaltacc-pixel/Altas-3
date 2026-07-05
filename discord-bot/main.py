@@ -42,6 +42,7 @@ COG_MODULES = [
     "cogs.economy",
     "cogs.leveling",
     "cogs.owner",
+    "cogs.servertools",
 ]
 
 

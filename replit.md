@@ -4,10 +4,9 @@ Atlas is a full-featured Discord moderation & utility bot covering moderation, a
 
 ## Run & Operate
 
-- The "Atlas Bot" workflow runs `cd discord-bot && python main.py`
-- Required secret: `DISCORD_TOKEN` (bot token from the Discord Developer Portal)
-- Data persists in `discord-bot/data/atlas.db` (SQLite, created automatically on first run)
-- Restart the workflow after any code change (cogs are loaded once at startup)
+- **The bot is actually hosted and run on Railway, not in this Replit workspace.** The local "Atlas Bot" workflow (`cd discord-bot && python main.py`) is for reference/editing only — it will fail here with `DISCORD_TOKEN is not set`, and that's expected since Railway holds the real token. Ship changes by pushing/syncing this code to the Railway deployment; don't chase the local workflow's token error.
+- Data persists in `discord-bot/data/atlas.db` (SQLite, created automatically on first run) — on Railway this needs a persistent volume or the DB resets on redeploy.
+- Cogs are loaded once at process start — the Railway service needs a redeploy/restart after any code change.
 - Owner-only commands (`eval`, `sync`, `reload`, `blacklist`, etc.) are restricted to a single hardcoded Discord user ID (`config.OWNER_ID`), not the Discord application's resolved owner. The Owner category is also hidden from `,help`/`/help` for everyone else.
 
 ## Stack
@@ -23,7 +22,7 @@ Atlas is a full-featured Discord moderation & utility bot covering moderation, a
 - `discord-bot/config.py` — non-secret settings (colors, emojis, XP/economy tuning); token read from env
 - `discord-bot/database.py` — SQLite schema + connection helpers
 - `discord-bot/utils/` — shared helpers: `embeds.py` (embed builders/progress bars), `checks.py` (permission decorators), `pagination.py` (button-based paginator), `helpers.py` (duration parsing, formatting)
-- `discord-bot/cogs/` — one file per command category (moderation, administration, utility, fun, information, automod, logging_cog, tickets, giveaways, welcome, economy, leveling, owner, help)
+- `discord-bot/cogs/` — one file per command category (moderation, administration, utility, fun, information, automod, logging_cog, tickets, giveaways, welcome, economy, leveling, owner, help, servertools)
 
 ## Architecture decisions
 
@@ -49,6 +48,7 @@ Atlas is a full-featured Discord moderation & utility bot covering moderation, a
 - **Welcome/Goodbye**: templated messages with placeholders, verification panel
 - **Economy**: balance, daily/work rewards, rob, bank deposit/withdraw, shop, leaderboard
 - **Leveling**: XP-on-message with cooldown, level-up announcements, level-based role rewards, rank card
+- **Server Tools** (`cogs/servertools.py`, all prefix-only): channel/category/voice-channel CRUD, role CRUD (color/hoist/mentionable/position), advanced purge filters (by user/bot/human/images/links/embeds/contains-text), warning count & bulk-clear, ban list, snipe/editsnipe (in-memory last deleted/edited message per channel), emoji & sticker & webhook management, invite list, member search, avatar/banner/icon direct URLs, per-channel permission lookup
 
 ## User preferences
 
@@ -56,9 +56,10 @@ _None recorded yet._
 
 ## Gotchas
 
-- Discord's 100 global slash-command cap applies to the whole application — if you add new hybrid commands, check the running total (see "Architecture decisions") or the bot will fail to start with `CommandLimitReached`.
-- Command names (prefix AND slash) share one global namespace across all cogs — reusing a name in a different cog raises `CommandRegistrationError` at startup, even if one version is hybrid and the other is prefix-only.
-- Always restart the "Atlas Bot" workflow after editing any cog — cogs are loaded once at process start.
+- Discord's 100 global slash-command cap applies to the whole application — if you add new hybrid commands, check the running total (see "Architecture decisions") or the bot will fail to start with `CommandLimitReached`. As of the last count: ~76 hybrid (slash+prefix) commands, ~261 total commands (the rest prefix-only) — still headroom before hitting the cap, but check before adding more hybrids.
+- Command names (prefix AND slash) share one global namespace across all cogs — reusing a name in a different cog raises `CommandRegistrationError` at startup, even if one version is hybrid and the other is prefix-only. Always grep `cogs/` for a command name before adding it.
+- Snipe/editsnipe state (`cogs/servertools.py`) is in-memory only (a dict keyed by channel ID) — it resets on every restart/redeploy and isn't persisted to SQLite, by design (it's meant to be ephemeral, like most bots' snipe features).
+- This repo is edited here but actually deployed on Railway (see "Run & Operate") — the local workflow failing on a missing token is expected, not a bug to fix.
 
 ## Pointers
 
