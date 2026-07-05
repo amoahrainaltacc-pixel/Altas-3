@@ -60,11 +60,11 @@ async def get_prefix(bot: "Atlas", message: discord.Message):
 STATUS_ROTATION = [
     lambda bot: discord.Activity(
         type=discord.ActivityType.watching,
-        name=f"over {sum(g.member_count or 0 for g in bot.guilds)} members",
+        name=f"Watching over {sum(g.member_count or 0 for g in bot.guilds)} members",
     ),
     lambda bot: discord.Activity(
         type=discord.ActivityType.watching,
-        name=f"over {len(bot.guilds)} servers",
+        name=f"Watching over {len(bot.guilds)} servers",
     ),
     lambda bot: discord.Game(name="one of Discord's best bots"),
     lambda bot: discord.Activity(type=discord.ActivityType.listening, name=",help | !help"),
