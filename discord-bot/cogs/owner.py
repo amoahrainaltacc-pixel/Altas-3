@@ -47,21 +47,58 @@ class BroadcastConfirmView(discord.ui.View):
     async def send_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="📤 Sending broadcast… this may take a moment.", embed=self.embed, view=self)
+        await interaction.response.edit_message(content="📤 Sending broadcast… this is intentionally slow to avoid Discord's spam/abuse detection.", embed=self.embed, view=self)
 
-        sent, failed = 0, 0
-        for user in self.recipients:
+        sent, skipped, aborted = await self._safe_broadcast()
+
+        if aborted:
+            note = (
+                f"⚠️ Broadcast **stopped early** after repeated rate-limit responses from Discord — "
+                f"this usually means it's flagging the volume as suspicious. Delivered to **{sent}**, "
+                f"skipped **{skipped}** before stopping. Wait a while before trying again with a smaller audience."
+            )
+            await interaction.followup.send(embed=error_embed(note, "Broadcast Stopped Early"))
+        else:
+            await interaction.followup.send(
+                embed=success_embed(f"Broadcast finished. Delivered to **{sent}** user(s), skipped **{skipped}** (DMs closed or errored).", "Broadcast Complete")
+            )
+        self.stop()
+
+    async def _safe_broadcast(self) -> tuple[int, int, bool]:
+        """Send DMs one at a time with a conservative pace, a longer breather
+        every batch, and a hard stop if Discord starts throttling us hard.
+        Discord treats fast unsolicited mass-DMs as spam/abuse and can disable
+        a bot's ability to be added to new servers — this is not just a normal
+        429, so we deliberately go slow and bail out rather than push through."""
+        sent = 0
+        skipped = 0
+        consecutive_rate_limits = 0
+        BATCH_SIZE = 20
+        PER_MESSAGE_DELAY = 2.5
+        BATCH_BREAK = 15
+
+        for i, user in enumerate(self.recipients, start=1):
             try:
                 await user.send(embed=self.embed)
                 sent += 1
-            except discord.HTTPException:
-                failed += 1
-            await asyncio.sleep(1)
+                consecutive_rate_limits = 0
+            except discord.Forbidden:
+                skipped += 1
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    consecutive_rate_limits += 1
+                    retry_after = getattr(e, "retry_after", None) or 5
+                    await asyncio.sleep(retry_after + 1)
+                    if consecutive_rate_limits >= 3:
+                        return sent, skipped, True
+                else:
+                    skipped += 1
 
-        await interaction.followup.send(
-            embed=success_embed(f"Broadcast finished. Delivered to **{sent}** user(s), failed for **{failed}**.", "Broadcast Complete")
-        )
-        self.stop()
+            await asyncio.sleep(PER_MESSAGE_DELAY)
+            if i % BATCH_SIZE == 0:
+                await asyncio.sleep(BATCH_BREAK)
+
+        return sent, skipped, False
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):

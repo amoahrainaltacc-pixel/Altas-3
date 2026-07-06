@@ -1,1 +1,2 @@
 - [Discord bot command namespace limits](discord-command-limits.md) — 100 global slash-command cap + one shared prefix namespace across all cogs; curate which commands are hybrid vs prefix-only.
+- [Discord mass-DM abuse detection](discord-mass-dm-abuse-detection.md) — fast bulk DMs trigger platform spam detection (bot blocked from new guilds), not just a 429; throttle hard and abort early on repeated rate-limits.
