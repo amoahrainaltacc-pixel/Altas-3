@@ -1,0 +1,14 @@
+discord.py
+requests
+aiohttp
+httpx
+flask
+fastapi
+uvicorn
+gunicorn
+python-dotenv
+pydantic
+numpy
+pandas
+colorama
+rich
