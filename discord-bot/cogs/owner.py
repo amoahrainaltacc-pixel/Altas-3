@@ -3,6 +3,7 @@ Owner-only tools: eval, extension management, blacklist, diagnostics, and mainte
 """
 
 import io
+import re
 import contextlib
 import textwrap
 import time
@@ -225,28 +226,47 @@ class Owner(commands.Cog, name="owner"):
     @commands.command(
         name="message_all",
         aliases=["messageall", "dmall", "broadcast"],
-        help="DM every user Atlas can see with an embed message — shows a preview with Send/Cancel first (owner only)",
+        help="DM users Atlas can see with an embed message. Optionally cap how many with 'limit=N' at the start — shows a preview with Send/Cancel first (owner only)",
     )
     @checks.is_bot_owner()
     async def message_all(self, ctx: commands.Context, *, message: str):
+        limit = None
+        match = re.match(r"^\s*limit\s*[:=]\s*(\d+)\s+(.*)$", message, re.DOTALL)
+        if match:
+            limit = int(match.group(1))
+            message = match.group(2)
+            if limit <= 0:
+                await ctx.send(embed=error_embed("Limit must be a positive number."))
+                return
+
+        if not message.strip():
+            await ctx.send(embed=error_embed("You need to include a message to send, e.g. `,message_all limit=50 Hello everyone!`"))
+            return
+
         recipients = {}
         for guild in self.bot.guilds:
             for member in guild.members:
                 if not member.bot:
                     recipients[member.id] = member
         recipients = list(recipients.values())
-
-        embed = base_embed("📢 Announcement", message, config.COLOR_PRIMARY)
-        embed.set_footer(text="Sent by the Atlas team")
+        total_available = len(recipients)
 
         if not recipients:
             await ctx.send(embed=error_embed("There's no one to message — Atlas can't see any non-bot members."))
             return
 
+        if limit is not None:
+            recipients = recipients[:limit]
+
+        embed = base_embed("📢 Announcement", message, config.COLOR_PRIMARY)
+        embed.set_footer(text="Sent by the Atlas team")
+
         view = BroadcastConfirmView(ctx.author.id, embed, recipients)
+        limit_note = f" (capped from **{total_available}** available)" if limit is not None else ""
         note = (
             f"**Preview** — this is exactly what will be DMed.\n"
-            f"Recipients: **{len(recipients)}** unique member(s) across **{len(self.bot.guilds)}** server(s).\n\n"
+            f"Recipients: **{len(recipients)}** unique member(s){limit_note} across **{len(self.bot.guilds)}** server(s).\n\n"
+            f"Tip: start your message with `limit=50` to cap how many people it sends to, e.g. `,message_all limit=50 Hello!`\n\n"
             f"Click **Send** to broadcast, or **Cancel** to abort."
         )
         view.message = await ctx.send(content=note, embed=embed, view=view)
