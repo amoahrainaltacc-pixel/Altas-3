@@ -33,7 +33,7 @@ EMOJI_ARROW = "➜"
 EMOJI_BULLET = "▸"
 
 # --- Misc ---
-SUPPORT_URL = "https://discord.com"
+SUPPORT_URL = "https://discord.gg/7tNRkVtZjK"
 GITHUB_URL = "https://github.com"
 WEBSITE_URL = "https://atlas-bot.base44.app"
 
