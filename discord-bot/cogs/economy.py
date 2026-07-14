@@ -8,7 +8,7 @@ from discord.ext import commands
 
 import config
 from database import get_conn, now
-from utils.embeds import success_embed, error_embed, base_embed
+from utils.embeds import success_embed, error_embed, base_embed, info_embed
 from utils.helpers import human_duration
 
 SHOP_ITEMS = {
@@ -38,6 +38,15 @@ class Economy(commands.Cog, name="economy"):
             cur = await conn.execute("SELECT * FROM economy WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
             row = await cur.fetchone()
         return row
+
+    async def _inventory_qty(self, guild_id: int, user_id: int, item: str) -> int:
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT quantity FROM inventory WHERE guild_id = ? AND user_id = ? AND item = ?",
+            (guild_id, user_id, item),
+        )
+        row = await cur.fetchone()
+        return row["quantity"] if row else 0
 
     @commands.hybrid_command(help="Check your (or another member's) balance")
     async def balance(self, ctx: commands.Context, member: discord.Member | None = None):
@@ -142,6 +151,21 @@ class Economy(commands.Cog, name="economy"):
         lines = [f"**{name}** — {price} coins" for name, price in SHOP_ITEMS.items()]
         await ctx.send(embed=base_embed("🛒 Shop", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix))
 
+    @commands.hybrid_command(help="View your inventory")
+    async def inventory(self, ctx: commands.Context, member: discord.Member | None = None):
+        member = member or ctx.author
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT item, quantity FROM inventory WHERE guild_id = ? AND user_id = ? AND quantity > 0",
+            (ctx.guild.id, member.id),
+        )
+        rows = await cur.fetchall()
+        if not rows:
+            await ctx.send(embed=error_embed(f"**{member.display_name}** doesn't own any items."))
+            return
+        lines = [f"**{r['item'].replace('_', ' ')}** — x{r['quantity']}" for r in rows]
+        await ctx.send(embed=base_embed(f"🎒 {member.display_name}'s Inventory", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix, ctx.guild))
+
     @commands.hybrid_command(help="Buy an item from the shop")
     async def buy(self, ctx: commands.Context, *, item: str):
         item = item.lower().replace(" ", "_")
@@ -155,6 +179,11 @@ class Economy(commands.Cog, name="economy"):
             return
         conn = get_conn()
         await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (price, ctx.guild.id, ctx.author.id))
+        await conn.execute(
+            "INSERT INTO inventory (guild_id, user_id, item, quantity) VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(guild_id, user_id, item) DO UPDATE SET quantity = quantity + 1",
+            (ctx.guild.id, ctx.author.id, item),
+        )
         await conn.commit()
         await ctx.send(embed=success_embed(f"You bought **{item.replace('_', ' ')}** for **{price}** coins!"))
 
@@ -164,9 +193,18 @@ class Economy(commands.Cog, name="economy"):
         if item not in SHOP_ITEMS:
             await ctx.send(embed=error_embed("That item doesn't exist."))
             return
-        refund = SHOP_ITEMS[item] // 2
+
         conn = get_conn()
-        await self._account(ctx.guild.id, ctx.author.id)
+        qty = await self._inventory_qty(ctx.guild.id, ctx.author.id, item)
+        if qty <= 0:
+            await ctx.send(embed=error_embed(f"You don't own **{item.replace('_', ' ')}**."))
+            return
+
+        refund = SHOP_ITEMS[item] // 2
+        await conn.execute(
+            "UPDATE inventory SET quantity = quantity - 1 WHERE guild_id = ? AND user_id = ? AND item = ?",
+            (ctx.guild.id, ctx.author.id, item),
+        )
         await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (refund, ctx.guild.id, ctx.author.id))
         await conn.commit()
         await ctx.send(embed=success_embed(f"Sold **{item.replace('_', ' ')}** for **{refund}** coins."))
