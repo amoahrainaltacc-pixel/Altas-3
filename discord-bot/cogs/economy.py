@@ -135,10 +135,11 @@ class Economy(commands.Cog, name="economy"):
         return await cur.fetchone()
 
     async def _check_loan_status(self, ctx: commands.Context) -> bool:
-        """Check if user has an active loan. Returns True if they do (blocked from economy), False otherwise."""
+        """Check if user has an OVERDUE loan. Returns True if overdue (blocked from economy), False otherwise."""
         loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
         if loan:
             time_remaining = loan["due_at"] - now()
+            # Only block if overdue (time_remaining <= 0)
             if time_remaining <= 0:
                 await ctx.send(
                     embed=error_embed(
@@ -147,16 +148,7 @@ class Economy(commands.Cog, name="economy"):
                         f"You cannot use economy commands until you repay your loan with `repayloan`."
                     )
                 )
-            else:
-                await ctx.send(
-                    embed=error_embed(
-                        f"⚠️ **You have an active loan!**\n"
-                        f"Amount: **{loan['amount']}** coins\n"
-                        f"Due in: **{human_duration(time_remaining)}**\n"
-                        f"You cannot use economy commands until you repay your loan with `repayloan`."
-                    )
-                )
-            return True
+                return True
         return False
 
     @commands.hybrid_command(help="Check your (or another member's) balance")
