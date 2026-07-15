@@ -70,6 +70,23 @@ class Economy(commands.Cog, name="economy"):
         )
         await conn.commit()
 
+    async def _ensure_loans_table(self):
+        """Create the loans table if it doesn't exist yet. Safe to call repeatedly."""
+        conn = get_conn()
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS loans (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                taken_at INTEGER NOT NULL,
+                due_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+            """
+        )
+        await conn.commit()
+
     async def _get_luck_bonus(self, guild_id: int, user_id: int) -> float:
         """Sum up luck bonuses from all boosters a user owns, capped at MAX_LUCK_BONUS."""
         await self._ensure_boosters_table()
@@ -96,8 +113,56 @@ class Economy(commands.Cog, name="economy"):
         row = await cur.fetchone()
         return row["quantity"] if row else 0
 
+    async def _has_active_loan(self, guild_id: int, user_id: int) -> bool:
+        """Check if a user has an active loan that hasn't been paid off."""
+        await self._ensure_loans_table()
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT * FROM loans WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        row = await cur.fetchone()
+        return row is not None
+
+    async def _get_active_loan(self, guild_id: int, user_id: int):
+        """Get the active loan for a user, or None if no active loan."""
+        await self._ensure_loans_table()
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT * FROM loans WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        return await cur.fetchone()
+
+    async def _check_loan_status(self, ctx: commands.Context) -> bool:
+        """Check if user has an active loan. Returns True if they do (blocked from economy), False otherwise."""
+        loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
+        if loan:
+            time_remaining = loan["due_at"] - now()
+            if time_remaining <= 0:
+                await ctx.send(
+                    embed=error_embed(
+                        f"⚠️ **Your loan is overdue!**\n"
+                        f"You owe **{loan['amount']}** coins.\n"
+                        f"You cannot use economy commands until you repay your loan with `repayloan`."
+                    )
+                )
+            else:
+                await ctx.send(
+                    embed=error_embed(
+                        f"⚠️ **You have an active loan!**\n"
+                        f"Amount: **{loan['amount']}** coins\n"
+                        f"Due in: **{human_duration(time_remaining)}**\n"
+                        f"You cannot use economy commands until you repay your loan with `repayloan`."
+                    )
+                )
+            return True
+        return False
+
     @commands.hybrid_command(help="Check your (or another member's) balance")
     async def balance(self, ctx: commands.Context, member: discord.Member | None = None):
+        if await self._check_loan_status(ctx):
+            return
         member = member or ctx.author
         row = await self._account(ctx.guild.id, member.id)
         embed = base_embed(f"💰 {member.display_name}'s Wallet", f"💵 **Cash:** {row['balance']}\n🏦 **Bank:** {row['bank']}", config.COLOR_PRIMARY, ctx.prefix, ctx.guild)
@@ -106,6 +171,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.hybrid_command(help="Claim your daily reward")
     async def daily(self, ctx: commands.Context):
+        if await self._check_loan_status(ctx):
+            return
         row = await self._account(ctx.guild.id, ctx.author.id)
         elapsed = now() - row["last_daily"]
         if elapsed < 86400:
@@ -121,6 +188,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.hybrid_command(help="Work for some coins")
     async def work(self, ctx: commands.Context):
+        if await self._check_loan_status(ctx):
+            return
         row = await self._account(ctx.guild.id, ctx.author.id)
         elapsed = now() - row["last_work"]
         if elapsed < 3600:
@@ -137,6 +206,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Attempt to rob another member")
     async def rob(self, ctx: commands.Context, member: discord.Member):
+        if await self._check_loan_status(ctx):
+            return
         if member.id == ctx.author.id:
             await ctx.send(embed=error_embed("You can't rob yourself."))
             return
@@ -168,6 +239,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Deposit coins into your bank")
     async def deposit(self, ctx: commands.Context, amount: int):
+        if await self._check_loan_status(ctx):
+            return
         row = await self._account(ctx.guild.id, ctx.author.id)
         if amount <= 0 or amount > row["balance"]:
             await ctx.send(embed=error_embed("Invalid amount."))
@@ -182,6 +255,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Withdraw coins from your bank")
     async def withdraw(self, ctx: commands.Context, amount: int):
+        if await self._check_loan_status(ctx):
+            return
         row = await self._account(ctx.guild.id, ctx.author.id)
         if amount <= 0 or amount > row["bank"]:
             await ctx.send(embed=error_embed("Invalid amount."))
@@ -242,6 +317,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.hybrid_command(help="Buy a luck booster from the shop")
     async def buy(self, ctx: commands.Context, *, item: str):
+        if await self._check_loan_status(ctx):
+            return
         item = item.lower().replace(" ", "_")
         if item not in LUCK_BOOSTERS:
             await ctx.send(embed=error_embed("That item doesn't exist. Check `shop` for options."))
@@ -269,6 +346,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Sell back a luck booster for half its price")
     async def sell(self, ctx: commands.Context, *, item: str):
+        if await self._check_loan_status(ctx):
+            return
         item = item.lower().replace(" ", "_")
         if item not in LUCK_BOOSTERS:
             await ctx.send(embed=error_embed("That item doesn't exist."))
@@ -291,6 +370,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Show your total net worth (cash + bank)")
     async def networth(self, ctx: commands.Context, member: discord.Member | None = None):
+        if await self._check_loan_status(ctx):
+            return
         member = member or ctx.author
         row = await self._account(ctx.guild.id, member.id)
         total = row["balance"] + row["bank"]
@@ -298,6 +379,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Give coins to another member")
     async def give(self, ctx: commands.Context, member: discord.Member, amount: int):
+        if await self._check_loan_status(ctx):
+            return
         if member.id == ctx.author.id:
             await ctx.send(embed=error_embed("You can't give coins to yourself."))
             return
@@ -317,6 +400,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Flip a coin and bet coins on the outcome")
     async def coinbet(self, ctx: commands.Context, amount: int, side: str = "heads"):
+        if await self._check_loan_status(ctx):
+            return
         side = side.lower()
         if side not in ("heads", "tails"):
             await ctx.send(embed=error_embed("Choose `heads` or `tails`."))
@@ -344,6 +429,8 @@ class Economy(commands.Cog, name="economy"):
 
     @commands.command(help="Roll dice and bet coins — high roll wins double")
     async def gamble(self, ctx: commands.Context, amount: int):
+        if await self._check_loan_status(ctx):
+            return
         row = await self._account(ctx.guild.id, ctx.author.id)
         if amount <= 0 or amount > row["balance"]:
             await ctx.send(embed=error_embed("Invalid bet amount."))
@@ -370,6 +457,119 @@ class Economy(commands.Cog, name="economy"):
             await ctx.send(embed=error_embed(f"You rolled **{player_roll}** vs house's **{house_roll}** — you lost **{amount}** coins."))
         else:
             await ctx.send(embed=info_embed(f"You both rolled **{player_roll}** — it's a tie, no coins lost."))
+
+    @commands.command(help="Take a loan from the bank (must repay within 1 hour)")
+    async def bankloan(self, ctx: commands.Context, amount: int):
+        """
+        Borrow coins from the bank. You must repay within 1 hour or you'll be locked out of economy commands.
+        Usage: !bankloan 5000
+        """
+        if amount <= 0:
+            await ctx.send(embed=error_embed("Loan amount must be positive."))
+            return
+        if amount > 50000:
+            await ctx.send(embed=error_embed("Maximum loan amount is **50,000** coins."))
+            return
+
+        # Check if user already has an active loan
+        existing_loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
+        if existing_loan:
+            time_remaining = existing_loan["due_at"] - now()
+            await ctx.send(
+                embed=error_embed(
+                    f"You already have an active loan of **{existing_loan['amount']}** coins!\n"
+                    f"Due in: **{human_duration(time_remaining)}**\n"
+                    f"Repay it first with `repayloan` before taking another."
+                )
+            )
+            return
+
+        await self._ensure_loans_table()
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        conn = get_conn()
+
+        # Add the loan to the loans table
+        due_time = now() + 3600  # 1 hour from now
+        await conn.execute(
+            "INSERT INTO loans (guild_id, user_id, amount, taken_at, due_at) VALUES (?, ?, ?, ?, ?)",
+            (ctx.guild.id, ctx.author.id, amount, now(), due_time),
+        )
+        # Add the coins to the user's balance
+        await conn.execute(
+            "UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?",
+            (amount, ctx.guild.id, ctx.author.id),
+        )
+        await conn.commit()
+
+        await ctx.send(
+            embed=success_embed(
+                f"💰 **Bank Loan Approved!**\n"
+                f"You borrowed **{amount}** coins.\n"
+                f"You must repay by **{human_duration(3600)}** or you'll be locked from economy commands.\n"
+                f"Use `repayloan` to repay."
+            )
+        )
+
+    @commands.command(help="Repay your active bank loan")
+    async def repayloan(self, ctx: commands.Context, amount: int | None = None):
+        """
+        Repay your bank loan. If no amount is specified, you repay the full amount.
+        Usage: !repayloan (repays full) or !repayloan 5000 (repays 5000)
+        """
+        await self._ensure_loans_table()
+        loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
+
+        if not loan:
+            await ctx.send(embed=error_embed("You don't have an active loan."))
+            return
+
+        if amount is None:
+            amount = loan["amount"]
+
+        if amount <= 0:
+            await ctx.send(embed=error_embed("Repayment amount must be positive."))
+            return
+
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        if row["balance"] < amount:
+            await ctx.send(embed=error_embed(f"You only have **{row['balance']}** coins. You need **{amount}** to repay."))
+            return
+
+        conn = get_conn()
+
+        if amount >= loan["amount"]:
+            # Full repayment - remove the loan
+            await conn.execute(
+                "DELETE FROM loans WHERE guild_id = ? AND user_id = ?",
+                (ctx.guild.id, ctx.author.id),
+            )
+            await conn.execute(
+                "UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?",
+                (loan["amount"], ctx.guild.id, ctx.author.id),
+            )
+            await conn.commit()
+            await ctx.send(embed=success_embed(f"✅ **Loan Repaid!**\nYou repaid **{loan['amount']}** coins. You're debt-free!"))
+        else:
+            # Partial repayment - update the loan amount
+            new_amount = loan["amount"] - amount
+            await conn.execute(
+                "UPDATE loans SET amount = ? WHERE guild_id = ? AND user_id = ?",
+                (new_amount, ctx.guild.id, ctx.author.id),
+            )
+            await conn.execute(
+                "UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?",
+                (amount, ctx.guild.id, ctx.author.id),
+            )
+            await conn.commit()
+            time_remaining = loan["due_at"] - now()
+            await ctx.send(
+                embed=success_embed(
+                    f"💵 **Partial Repayment**\n"
+                    f"You repaid **{amount}** coins.\n"
+                    f"Remaining balance: **{new_amount}** coins\n"
+                    f"Due in: **{human_duration(time_remaining)}**"
+                )
+            )
 
     @commands.command(help="Reset a member's balance to the starting amount (admin only)")
     @commands.has_permissions(manage_guild=True)
