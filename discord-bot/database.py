@@ -147,6 +147,14 @@ CREATE TABLE IF NOT EXISTS economy (
     PRIMARY KEY (guild_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS boosters (
+    guild_id INTEGER,
+    user_id INTEGER,
+    item TEXT,
+    quantity INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, item)
+);
+
 CREATE TABLE IF NOT EXISTS levels (
     guild_id INTEGER,
     user_id INTEGER,
