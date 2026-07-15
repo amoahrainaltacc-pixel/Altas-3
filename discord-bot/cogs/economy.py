@@ -1,5 +1,5 @@
 """
-Simple guild-scoped economy: balances, daily/work rewards, a shop, and leaderboards.
+Simple guild-scoped economy: balances, daily/work rewards, luck boosters, and leaderboards.
 """
 
 import random
@@ -11,16 +11,22 @@ from database import get_conn, now
 from utils.embeds import success_embed, error_embed, base_embed, info_embed
 from utils.helpers import human_duration
 
-SHOP_ITEMS = {
-    "vip": 5000,
-    "color_role": 2000,
-    "shoutout": 1000,
-    "sticker_pack": 500,
+# Luck boosters: replaces the old cosmetic shop.
+# "luck_bonus" is added directly to win probability for coinbet/gamble.
+# e.g. 0.05 = +5 percentage points of win chance.
+LUCK_BOOSTERS = {
+    "lucky_charm": {"price": 500, "luck_bonus": 0.03, "desc": "A small trinket. +3% win chance."},
+    "four_leaf_clover": {"price": 1500, "luck_bonus": 0.07, "desc": "Genuinely rare. +7% win chance."},
+    "rabbits_foot": {"price": 3000, "luck_bonus": 0.12, "desc": "Lucky, if you're not the rabbit. +12% win chance."},
+    "vip": {"price": 5000, "luck_bonus": 0.20, "desc": "The best odds money can buy. +20% win chance."},
 }
+
+# Safety cap so stacking boosters can't push win chance to something absurd.
+MAX_LUCK_BONUS = 0.35
 
 
 class Economy(commands.Cog, name="economy"):
-    """A lighthearted virtual economy with daily rewards and a shop."""
+    """A lighthearted virtual economy with daily rewards, gambling, and luck boosters."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -43,6 +49,48 @@ class Economy(commands.Cog, name="economy"):
         conn = get_conn()
         cur = await conn.execute(
             "SELECT quantity FROM inventory WHERE guild_id = ? AND user_id = ? AND item = ?",
+            (guild_id, user_id, item),
+        )
+        row = await cur.fetchone()
+        return row["quantity"] if row else 0
+
+    async def _ensure_boosters_table(self):
+        """Create the boosters table if it doesn't exist yet. Safe to call repeatedly."""
+        conn = get_conn()
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS boosters (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                item TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id, item)
+            )
+            """
+        )
+        await conn.commit()
+
+    async def _get_luck_bonus(self, guild_id: int, user_id: int) -> float:
+        """Sum up luck bonuses from all boosters a user owns, capped at MAX_LUCK_BONUS."""
+        await self._ensure_boosters_table()
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT item, quantity FROM boosters WHERE guild_id = ? AND user_id = ? AND quantity > 0",
+            (guild_id, user_id),
+        )
+        rows = await cur.fetchall()
+        total = 0.0
+        for r in rows:
+            info = LUCK_BOOSTERS.get(r["item"])
+            if info:
+                total += info["luck_bonus"] * r["quantity"]
+        return min(total, MAX_LUCK_BONUS)
+
+    async def _booster_qty(self, guild_id: int, user_id: int, item: str) -> int:
+        await self._ensure_boosters_table()
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT quantity FROM boosters WHERE guild_id = ? AND user_id = ? AND item = ?",
             (guild_id, user_id, item),
         )
         row = await cur.fetchone()
@@ -146,63 +194,95 @@ class Economy(commands.Cog, name="economy"):
         await conn.commit()
         await ctx.send(embed=success_embed(f"Withdrew **{amount}** coins from your bank."))
 
-    @commands.hybrid_command(help="View the shop")
+    @commands.hybrid_command(name="shop", help="View luck boosters for sale")
     async def shop(self, ctx: commands.Context):
-        lines = [f"**{name}** — {price} coins" for name, price in SHOP_ITEMS.items()]
-        await ctx.send(embed=base_embed("🛒 Shop", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix))
+        lines = [
+            f"**{name.replace('_', ' ')}** — {info['price']} coins\n> {info['desc']}"
+            for name, info in LUCK_BOOSTERS.items()
+        ]
+        embed = base_embed(
+            "🍀 Luck Booster Shop",
+            "\n\n".join(lines) + f"\n\n*Boosts stack, capped at +{int(MAX_LUCK_BONUS * 100)}% win chance total.*",
+            config.COLOR_PRIMARY,
+            ctx.prefix,
+        )
+        await ctx.send(embed=embed)
 
     @commands.hybrid_command(help="View your inventory")
     async def inventory(self, ctx: commands.Context, member: discord.Member | None = None):
         member = member or ctx.author
+        await self._ensure_boosters_table()
         conn = get_conn()
+
         cur = await conn.execute(
             "SELECT item, quantity FROM inventory WHERE guild_id = ? AND user_id = ? AND quantity > 0",
             (ctx.guild.id, member.id),
         )
-        rows = await cur.fetchall()
-        if not rows:
+        old_rows = await cur.fetchall()
+
+        cur = await conn.execute(
+            "SELECT item, quantity FROM boosters WHERE guild_id = ? AND user_id = ? AND quantity > 0",
+            (ctx.guild.id, member.id),
+        )
+        booster_rows = await cur.fetchall()
+
+        if not old_rows and not booster_rows:
             await ctx.send(embed=error_embed(f"**{member.display_name}** doesn't own any items."))
             return
-        lines = [f"**{r['item'].replace('_', ' ')}** — x{r['quantity']}" for r in rows]
-        await ctx.send(embed=base_embed(f"🎒 {member.display_name}'s Inventory", "\n".join(lines), config.COLOR_PRIMARY, ctx.prefix, ctx.guild))
 
-    @commands.hybrid_command(help="Buy an item from the shop")
+        lines = [f"**{r['item'].replace('_', ' ')}** — x{r['quantity']}" for r in old_rows]
+        lines += [f"🍀 **{r['item'].replace('_', ' ')}** — x{r['quantity']}" for r in booster_rows]
+
+        total_luck = await self._get_luck_bonus(ctx.guild.id, member.id)
+        desc = "\n".join(lines)
+        if total_luck > 0:
+            desc += f"\n\n**Total luck bonus:** +{total_luck * 100:.0f}% win chance"
+
+        await ctx.send(embed=base_embed(f"🎒 {member.display_name}'s Inventory", desc, config.COLOR_PRIMARY, ctx.prefix, ctx.guild))
+
+    @commands.hybrid_command(help="Buy a luck booster from the shop")
     async def buy(self, ctx: commands.Context, *, item: str):
         item = item.lower().replace(" ", "_")
-        if item not in SHOP_ITEMS:
+        if item not in LUCK_BOOSTERS:
             await ctx.send(embed=error_embed("That item doesn't exist. Check `shop` for options."))
             return
+
         row = await self._account(ctx.guild.id, ctx.author.id)
-        price = SHOP_ITEMS[item]
+        price = LUCK_BOOSTERS[item]["price"]
         if row["balance"] < price:
             await ctx.send(embed=error_embed(f"You need **{price}** coins for that."))
             return
+
+        await self._ensure_boosters_table()
         conn = get_conn()
         await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (price, ctx.guild.id, ctx.author.id))
         await conn.execute(
-            "INSERT INTO inventory (guild_id, user_id, item, quantity) VALUES (?, ?, ?, 1) "
+            "INSERT INTO boosters (guild_id, user_id, item, quantity) VALUES (?, ?, ?, 1) "
             "ON CONFLICT(guild_id, user_id, item) DO UPDATE SET quantity = quantity + 1",
             (ctx.guild.id, ctx.author.id, item),
         )
         await conn.commit()
-        await ctx.send(embed=success_embed(f"You bought **{item.replace('_', ' ')}** for **{price}** coins!"))
+        await ctx.send(embed=success_embed(
+            f"You bought **{item.replace('_', ' ')}** for **{price}** coins! "
+            f"(+{LUCK_BOOSTERS[item]['luck_bonus'] * 100:.0f}% win chance)"
+        ))
 
-    @commands.command(help="Sell back an item for half its price")
+    @commands.command(help="Sell back a luck booster for half its price")
     async def sell(self, ctx: commands.Context, *, item: str):
         item = item.lower().replace(" ", "_")
-        if item not in SHOP_ITEMS:
+        if item not in LUCK_BOOSTERS:
             await ctx.send(embed=error_embed("That item doesn't exist."))
             return
 
-        conn = get_conn()
-        qty = await self._inventory_qty(ctx.guild.id, ctx.author.id, item)
+        qty = await self._booster_qty(ctx.guild.id, ctx.author.id, item)
         if qty <= 0:
             await ctx.send(embed=error_embed(f"You don't own **{item.replace('_', ' ')}**."))
             return
 
-        refund = SHOP_ITEMS[item] // 2
+        conn = get_conn()
+        refund = LUCK_BOOSTERS[item]["price"] // 2
         await conn.execute(
-            "UPDATE inventory SET quantity = quantity - 1 WHERE guild_id = ? AND user_id = ? AND item = ?",
+            "UPDATE boosters SET quantity = quantity - 1 WHERE guild_id = ? AND user_id = ? AND item = ?",
             (ctx.guild.id, ctx.author.id, item),
         )
         await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (refund, ctx.guild.id, ctx.author.id))
@@ -245,13 +325,19 @@ class Economy(commands.Cog, name="economy"):
         if amount <= 0 or amount > row["balance"]:
             await ctx.send(embed=error_embed("Invalid bet amount."))
             return
-        result = random.choice(["heads", "tails"])
+
+        luck_bonus = await self._get_luck_bonus(ctx.guild.id, ctx.author.id)
+        win_chance = 0.5 + luck_bonus
+        won = random.random() < win_chance
+
         conn = get_conn()
-        if result == side:
+        if won:
+            result = side
             await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
             await conn.commit()
             await ctx.send(embed=success_embed(f"It landed on **{result}**! You won **{amount}** coins."))
         else:
+            result = "tails" if side == "heads" else "heads"
             await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
             await conn.commit()
             await ctx.send(embed=error_embed(f"It landed on **{result}**. You lost **{amount}** coins."))
@@ -262,8 +348,17 @@ class Economy(commands.Cog, name="economy"):
         if amount <= 0 or amount > row["balance"]:
             await ctx.send(embed=error_embed("Invalid bet amount."))
             return
+
+        luck_bonus = await self._get_luck_bonus(ctx.guild.id, ctx.author.id)
+
         player_roll = random.randint(1, 6)
         house_roll = random.randint(1, 6)
+
+        # Apply luck as a chance to nudge a tie or narrow loss into a win,
+        # rather than touching the dice directly (keeps rolls meaningful/visible).
+        if player_roll <= house_roll and random.random() < luck_bonus:
+            player_roll = house_roll + 1
+
         conn = get_conn()
         if player_roll > house_roll:
             await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
