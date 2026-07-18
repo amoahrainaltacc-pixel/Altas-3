@@ -4,9 +4,12 @@ All tables are created lazily on startup. No ORM — plain SQL kept small and ex
 """
 
 import time
+import logging
 import aiosqlite
 import os
 from config import DB_PATH
+
+log = logging.getLogger("atlas.db")
 
 _conn: aiosqlite.Connection | None = None
 
@@ -183,33 +186,52 @@ CREATE TABLE IF NOT EXISTS starboard_posts (
 );
 """
 
+# Columns to backfill on existing DBs. CREATE TABLE IF NOT EXISTS won't add
+# new columns to a table that already exists, so we ALTER TABLE these in,
+# skipping only the "duplicate column" case and logging everything else.
+_MIGRATIONS = [
+    ("guild_config", "language", "ALTER TABLE guild_config ADD COLUMN language TEXT DEFAULT 'en'"),
+    ("tickets", "reason", "ALTER TABLE tickets ADD COLUMN reason TEXT"),
+    ("tickets", "closed_at", "ALTER TABLE tickets ADD COLUMN closed_at INTEGER"),
+    ("ticket_config", "log_channel_id", "ALTER TABLE ticket_config ADD COLUMN log_channel_id INTEGER"),
+]
+
 
 async def init_db() -> None:
     global _conn
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     _conn = await aiosqlite.connect(DB_PATH)
     _conn.row_factory = aiosqlite.Row
+
+    # WAL mode lets reads and writes coexist instead of throwing
+    # "database is locked" under concurrent access. busy_timeout makes
+    # SQLite retry for 5s instead of failing immediately on contention.
+    await _conn.execute("PRAGMA journal_mode = WAL")
+    await _conn.execute("PRAGMA busy_timeout = 5000")
+    await _conn.execute("PRAGMA foreign_keys = ON")
+
     await _conn.executescript(SCHEMA)
     await _conn.commit()
-    # Lightweight migration for columns added after initial release —
-    # CREATE TABLE IF NOT EXISTS won't add new columns to an existing table.
-    migrations = [
-        "ALTER TABLE guild_config ADD COLUMN language TEXT DEFAULT 'en'",
-        "ALTER TABLE tickets ADD COLUMN reason TEXT",
-        "ALTER TABLE tickets ADD COLUMN closed_at INTEGER",
-        "ALTER TABLE ticket_config ADD COLUMN log_channel_id INTEGER",
-    ]
-    for stmt in migrations:
+
+    for table, column, stmt in _MIGRATIONS:
         try:
             await _conn.execute(stmt)
             await _conn.commit()
-        except Exception:
-            pass
+        except aiosqlite.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                log.warning("Migration failed for %s.%s: %s", table, column, e)
+        except Exception as e:
+            log.warning("Unexpected error migrating %s.%s: %s", table, column, e)
+
+    log.info("Database initialized at %s", DB_PATH)
 
 
 def get_conn() -> aiosqlite.Connection:
     if _conn is None:
-        raise RuntimeError("Database not initialized. Call init_db() first.")
+        raise RuntimeError(
+            "Database not initialized. Call `await init_db()` before any DB access "
+            "(e.g. in setup_hook, before the bot logs in)."
+        )
     return _conn
 
 
@@ -232,6 +254,13 @@ async def get_guild_config(guild_id: int) -> aiosqlite.Row:
 
 
 async def set_guild_config(guild_id: int, **fields) -> None:
+    if not fields:
+        # Previously this built "UPDATE guild_config SET  WHERE guild_id = ?"
+        # (empty SET clause) and raised sqlite3.OperationalError, which — if
+        # your command handler swallows exceptions — looks exactly like
+        # "saving silently does nothing."
+        return
+
     await ensure_guild(guild_id)
     conn = get_conn()
     keys = ", ".join(f"{k} = ?" for k in fields)
