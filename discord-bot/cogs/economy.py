@@ -1,5 +1,5 @@
 """
-Simple guild-scoped economy: balances, daily/work rewards, luck boosters, and leaderboards.
+Simple guild-scoped economy: balances, daily/work rewards, yealuck boosters, and leaderboards.
 """
 
 import random
