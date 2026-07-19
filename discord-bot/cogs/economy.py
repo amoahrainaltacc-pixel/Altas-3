@@ -184,8 +184,8 @@ class Economy(commands.Cog, name="economy"):
             return
         row = await self._account(ctx.guild.id, ctx.author.id)
         elapsed = now() - row["last_work"]
-        if elapsed < 3600:
-            await ctx.send(embed=error_embed(f"You're tired. Rest for **{human_duration(3600 - elapsed)}**."))
+        if elapsed < 10:
+            await ctx.send(embed=error_embed(f"You're tired. Rest for **{human_duration(10 - elapsed)}**."))
             return
         earnings = random.randint(config.WORK_MIN, config.WORK_MAX)
         conn = get_conn()
