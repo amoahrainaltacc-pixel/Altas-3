@@ -11,9 +11,6 @@ from database import get_conn, now
 from utils.embeds import success_embed, error_embed, base_embed, info_embed
 from utils.helpers import human_duration
 
-# Luck boosters: replaces the old cosmetic shop.
-# "luck_bonus" is added directly to win probability for coinbet/gamble.
-# e.g. 0.05 = +5 percentage points of win chance.
 LUCK_BOOSTERS = {
     "lucky_charm": {"price": 500, "luck_bonus": 0.03, "desc": "A small trinket. +3% win chance."},
     "four_leaf_clover": {"price": 1500, "luck_bonus": 0.07, "desc": "Genuinely rare. +7% win chance."},
@@ -21,8 +18,9 @@ LUCK_BOOSTERS = {
     "vip": {"price": 5000, "luck_bonus": 0.20, "desc": "The best odds money can buy. +20% win chance."},
 }
 
-# Safety cap so stacking boosters can't push win chance to something absurd.
 MAX_LUCK_BONUS = 0.35
+MAX_PURCHASES_PER_ITEM = 5
+WORK_COOLDOWN = 10  # seconds. 10ms is not a cooldown, it's a typo.
 
 
 class Economy(commands.Cog, name="economy"):
@@ -55,7 +53,6 @@ class Economy(commands.Cog, name="economy"):
         return row["quantity"] if row else 0
 
     async def _ensure_boosters_table(self):
-        """Create the boosters table if it doesn't exist yet. Safe to call repeatedly."""
         conn = get_conn()
         await conn.execute(
             """
@@ -70,8 +67,28 @@ class Economy(commands.Cog, name="economy"):
         )
         await conn.commit()
 
+    async def _ensure_purchase_log_table(self):
+        """
+        Tracks lifetime purchase counts per item, separate from `quantity` in boosters.
+        Selling a booster back reduces quantity but NOT the purchase count — that's the
+        whole point of a purchase cap. If it tracked quantity, sell-then-rebuy would be
+        an infinite loop around the cap.
+        """
+        conn = get_conn()
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS purchase_log (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                item TEXT NOT NULL,
+                times_bought INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id, item)
+            )
+            """
+        )
+        await conn.commit()
+
     async def _ensure_loans_table(self):
-        """Create the loans table if it doesn't exist yet. Safe to call repeatedly."""
         conn = get_conn()
         await conn.execute(
             """
@@ -87,8 +104,27 @@ class Economy(commands.Cog, name="economy"):
         )
         await conn.commit()
 
+    async def _times_bought(self, guild_id: int, user_id: int, item: str) -> int:
+        await self._ensure_purchase_log_table()
+        conn = get_conn()
+        cur = await conn.execute(
+            "SELECT times_bought FROM purchase_log WHERE guild_id = ? AND user_id = ? AND item = ?",
+            (guild_id, user_id, item),
+        )
+        row = await cur.fetchone()
+        return row["times_bought"] if row else 0
+
+    async def _record_purchase(self, guild_id: int, user_id: int, item: str):
+        conn = get_conn()
+        await conn.execute(
+            "INSERT INTO purchase_log (guild_id, user_id, item, times_bought) VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(guild_id, user_id, item) DO UPDATE SET times_bought = times_bought + 1",
+            (guild_id, user_id, item),
+        )
+        # commit happens in caller — same transaction as the balance deduction,
+        # so a crash mid-purchase can't leave coins spent with no item recorded.
+
     async def _get_luck_bonus(self, guild_id: int, user_id: int) -> float:
-        """Sum up luck bonuses from all boosters a user owns, capped at MAX_LUCK_BONUS."""
         await self._ensure_boosters_table()
         conn = get_conn()
         cur = await conn.execute(
@@ -114,7 +150,6 @@ class Economy(commands.Cog, name="economy"):
         return row["quantity"] if row else 0
 
     async def _has_active_loan(self, guild_id: int, user_id: int) -> bool:
-        """Check if a user has an active loan that hasn't been paid off."""
         await self._ensure_loans_table()
         conn = get_conn()
         cur = await conn.execute(
@@ -125,7 +160,6 @@ class Economy(commands.Cog, name="economy"):
         return row is not None
 
     async def _get_active_loan(self, guild_id: int, user_id: int):
-        """Get the active loan for a user, or None if no active loan."""
         await self._ensure_loans_table()
         conn = get_conn()
         cur = await conn.execute(
@@ -135,11 +169,9 @@ class Economy(commands.Cog, name="economy"):
         return await cur.fetchone()
 
     async def _check_loan_status(self, ctx: commands.Context) -> bool:
-        """Check if user has an OVERDUE loan. Returns True if overdue (blocked from economy), False otherwise."""
         loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
         if loan:
             time_remaining = loan["due_at"] - now()
-            # Only block if overdue (time_remaining <= 0)
             if time_remaining <= 0:
                 await ctx.send(
                     embed=error_embed(
@@ -184,8 +216,8 @@ class Economy(commands.Cog, name="economy"):
             return
         row = await self._account(ctx.guild.id, ctx.author.id)
         elapsed = now() - row["last_work"]
-        if elapsed < 10:
-            await ctx.send(embed=error_embed(f"You're tired. Rest for **{human_duration(10 - elapsed)}**."))
+        if elapsed < WORK_COOLDOWN:
+            await ctx.send(embed=error_embed(f"You're tired. Rest for **{human_duration(WORK_COOLDOWN - elapsed)}**."))
             return
         earnings = random.randint(config.WORK_MIN, config.WORK_MAX)
         conn = get_conn()
@@ -245,6 +277,23 @@ class Economy(commands.Cog, name="economy"):
         await conn.commit()
         await ctx.send(embed=success_embed(f"Deposited **{amount}** coins into your bank."))
 
+    @commands.command(help="Deposit all your cash into your bank")
+    async def depositall(self, ctx: commands.Context):
+        if await self._check_loan_status(ctx):
+            return
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        if row["balance"] <= 0:
+            await ctx.send(embed=error_embed("You have nothing to deposit."))
+            return
+        amount = row["balance"]
+        conn = get_conn()
+        await conn.execute(
+            "UPDATE economy SET balance = balance - ?, bank = bank + ? WHERE guild_id = ? AND user_id = ?",
+            (amount, amount, ctx.guild.id, ctx.author.id),
+        )
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"Deposited all **{amount}** coins into your bank."))
+
     @commands.command(help="Withdraw coins from your bank")
     async def withdraw(self, ctx: commands.Context, amount: int):
         if await self._check_loan_status(ctx):
@@ -261,10 +310,27 @@ class Economy(commands.Cog, name="economy"):
         await conn.commit()
         await ctx.send(embed=success_embed(f"Withdrew **{amount}** coins from your bank."))
 
+    @commands.command(help="Withdraw all coins from your bank")
+    async def withdrawall(self, ctx: commands.Context):
+        if await self._check_loan_status(ctx):
+            return
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        if row["bank"] <= 0:
+            await ctx.send(embed=error_embed("Your bank is empty."))
+            return
+        amount = row["bank"]
+        conn = get_conn()
+        await conn.execute(
+            "UPDATE economy SET balance = balance + ?, bank = bank - ? WHERE guild_id = ? AND user_id = ?",
+            (amount, amount, ctx.guild.id, ctx.author.id),
+        )
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"Withdrew all **{amount}** coins from your bank."))
+
     @commands.hybrid_command(name="shop", help="View luck boosters for sale")
     async def shop(self, ctx: commands.Context):
         lines = [
-            f"**{name.replace('_', ' ')}** — {info['price']} coins\n> {info['desc']}"
+            f"**{name.replace('_', ' ')}** — {info['price']} coins (max {MAX_PURCHASES_PER_ITEM}/person)\n> {info['desc']}"
             for name, info in LUCK_BOOSTERS.items()
         ]
         embed = base_embed(
@@ -316,6 +382,14 @@ class Economy(commands.Cog, name="economy"):
             await ctx.send(embed=error_embed("That item doesn't exist. Check `shop` for options."))
             return
 
+        times_bought = await self._times_bought(ctx.guild.id, ctx.author.id, item)
+        if times_bought >= MAX_PURCHASES_PER_ITEM:
+            await ctx.send(embed=error_embed(
+                f"You've hit the purchase limit for **{item.replace('_', ' ')}** "
+                f"({MAX_PURCHASES_PER_ITEM}/{MAX_PURCHASES_PER_ITEM}). Selling it back doesn't reset this."
+            ))
+            return
+
         row = await self._account(ctx.guild.id, ctx.author.id)
         price = LUCK_BOOSTERS[item]["price"]
         if row["balance"] < price:
@@ -330,10 +404,14 @@ class Economy(commands.Cog, name="economy"):
             "ON CONFLICT(guild_id, user_id, item) DO UPDATE SET quantity = quantity + 1",
             (ctx.guild.id, ctx.author.id, item),
         )
+        await self._record_purchase(ctx.guild.id, ctx.author.id, item)
         await conn.commit()
+
+        remaining = MAX_PURCHASES_PER_ITEM - (times_bought + 1)
         await ctx.send(embed=success_embed(
             f"You bought **{item.replace('_', ' ')}** for **{price}** coins! "
-            f"(+{LUCK_BOOSTERS[item]['luck_bonus'] * 100:.0f}% win chance)"
+            f"(+{LUCK_BOOSTERS[item]['luck_bonus'] * 100:.0f}% win chance)\n"
+            f"**{remaining}** purchase{'s' if remaining != 1 else ''} remaining for this item."
         ))
 
     @commands.command(help="Sell back a luck booster for half its price")
@@ -433,8 +511,6 @@ class Economy(commands.Cog, name="economy"):
         player_roll = random.randint(1, 6)
         house_roll = random.randint(1, 6)
 
-        # Apply luck as a chance to nudge a tie or narrow loss into a win,
-        # rather than touching the dice directly (keeps rolls meaningful/visible).
         if player_roll <= house_roll and random.random() < luck_bonus:
             player_roll = house_roll + 1
 
@@ -450,12 +526,40 @@ class Economy(commands.Cog, name="economy"):
         else:
             await ctx.send(embed=info_embed(f"You both rolled **{player_roll}** — it's a tie, no coins lost."))
 
+    @commands.command(help="Bet coins on a slot machine — three matching symbols pays out big")
+    async def slots(self, ctx: commands.Context, amount: int):
+        if await self._check_loan_status(ctx):
+            return
+        row = await self._account(ctx.guild.id, ctx.author.id)
+        if amount <= 0 or amount > row["balance"]:
+            await ctx.send(embed=error_embed("Invalid bet amount."))
+            return
+
+        symbols = ["🍒", "🍋", "🍇", "🔔", "💎", "7️⃣"]
+        weights = [30, 25, 20, 15, 8, 2]
+        luck_bonus = await self._get_luck_bonus(ctx.guild.id, ctx.author.id)
+
+        spin = random.choices(symbols, weights=weights, k=3)
+
+        conn = get_conn()
+        if spin[0] == spin[1] == spin[2]:
+            multiplier = {"🍒": 3, "🍋": 4, "🍇": 5, "🔔": 8, "💎": 15, "7️⃣": 25}[spin[0]]
+            payout = amount * multiplier
+            await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (payout, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=success_embed(f"{' '.join(spin)}\nJACKPOT! You won **{payout}** coins!"))
+        elif len(set(spin)) == 2 and random.random() < (0.15 + luck_bonus):
+            refund = amount // 2
+            await conn.execute("UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?", (refund, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=info_embed(f"{' '.join(spin)}\nClose one. Refunded **{refund}** coins."))
+        else:
+            await conn.execute("UPDATE economy SET balance = balance - ? WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, ctx.author.id))
+            await conn.commit()
+            await ctx.send(embed=error_embed(f"{' '.join(spin)}\nNo match. Lost **{amount}** coins."))
+
     @commands.command(help="Take a loan from the bank (must repay within 1 hour)")
     async def bankloan(self, ctx: commands.Context, amount: int):
-        """
-        Borrow coins from the bank. You must repay within 1 hour or you'll be locked out of economy commands.
-        Usage: !bankloan 5000
-        """
         if amount <= 0:
             await ctx.send(embed=error_embed("Loan amount must be positive."))
             return
@@ -463,7 +567,6 @@ class Economy(commands.Cog, name="economy"):
             await ctx.send(embed=error_embed("Maximum loan amount is **50,000** coins."))
             return
 
-        # Check if user already has an active loan
         existing_loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
         if existing_loan:
             time_remaining = existing_loan["due_at"] - now()
@@ -477,16 +580,14 @@ class Economy(commands.Cog, name="economy"):
             return
 
         await self._ensure_loans_table()
-        row = await self._account(ctx.guild.id, ctx.author.id)
+        await self._account(ctx.guild.id, ctx.author.id)
         conn = get_conn()
 
-        # Add the loan to the loans table
-        due_time = now() + 3600  # 1 hour from now
+        due_time = now() + 3600
         await conn.execute(
             "INSERT INTO loans (guild_id, user_id, amount, taken_at, due_at) VALUES (?, ?, ?, ?, ?)",
             (ctx.guild.id, ctx.author.id, amount, now(), due_time),
         )
-        # Add the coins to the user's balance
         await conn.execute(
             "UPDATE economy SET balance = balance + ? WHERE guild_id = ? AND user_id = ?",
             (amount, ctx.guild.id, ctx.author.id),
@@ -502,12 +603,22 @@ class Economy(commands.Cog, name="economy"):
             )
         )
 
+    @commands.command(help="Check your active loan status")
+    async def loanstatus(self, ctx: commands.Context):
+        loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
+        if not loan:
+            await ctx.send(embed=info_embed("You don't have an active loan."))
+            return
+        time_remaining = loan["due_at"] - now()
+        status = "OVERDUE" if time_remaining <= 0 else human_duration(time_remaining)
+        await ctx.send(embed=base_embed(
+            "📋 Loan Status",
+            f"**Owed:** {loan['amount']} coins\n**Due in:** {status}",
+            config.COLOR_PRIMARY, ctx.prefix, ctx.guild
+        ))
+
     @commands.command(help="Repay your active bank loan")
     async def repayloan(self, ctx: commands.Context, amount: int | None = None):
-        """
-        Repay your bank loan. If no amount is specified, you repay the full amount.
-        Usage: !repayloan (repays full) or !repayloan 5000 (repays 5000)
-        """
         await self._ensure_loans_table()
         loan = await self._get_active_loan(ctx.guild.id, ctx.author.id)
 
@@ -530,7 +641,6 @@ class Economy(commands.Cog, name="economy"):
         conn = get_conn()
 
         if amount >= loan["amount"]:
-            # Full repayment - remove the loan
             await conn.execute(
                 "DELETE FROM loans WHERE guild_id = ? AND user_id = ?",
                 (ctx.guild.id, ctx.author.id),
@@ -542,7 +652,6 @@ class Economy(commands.Cog, name="economy"):
             await conn.commit()
             await ctx.send(embed=success_embed(f"✅ **Loan Repaid!**\nYou repaid **{loan['amount']}** coins. You're debt-free!"))
         else:
-            # Partial repayment - update the loan amount
             new_amount = loan["amount"] - amount
             await conn.execute(
                 "UPDATE loans SET amount = ? WHERE guild_id = ? AND user_id = ?",
@@ -563,6 +672,25 @@ class Economy(commands.Cog, name="economy"):
                 )
             )
 
+    @commands.command(help="Show what a luck booster does before you buy it")
+    async def iteminfo(self, ctx: commands.Context, *, item: str):
+        item = item.lower().replace(" ", "_")
+        if item not in LUCK_BOOSTERS:
+            await ctx.send(embed=error_embed("That item doesn't exist. Check `shop` for options."))
+            return
+        info = LUCK_BOOSTERS[item]
+        times_bought = await self._times_bought(ctx.guild.id, ctx.author.id, item)
+        owned = await self._booster_qty(ctx.guild.id, ctx.author.id, item)
+        await ctx.send(embed=base_embed(
+            f"🍀 {item.replace('_', ' ').title()}",
+            f"{info['desc']}\n\n"
+            f"**Price:** {info['price']} coins\n"
+            f"**Win bonus:** +{info['luck_bonus'] * 100:.0f}%\n"
+            f"**You own:** {owned}\n"
+            f"**Purchases used:** {times_bought}/{MAX_PURCHASES_PER_ITEM}",
+            config.COLOR_PRIMARY, ctx.prefix, ctx.guild
+        ))
+
     @commands.command(help="Reset a member's balance to the starting amount (admin only)")
     @commands.has_permissions(manage_guild=True)
     async def resetbalance(self, ctx: commands.Context, member: discord.Member):
@@ -573,6 +701,30 @@ class Economy(commands.Cog, name="economy"):
         )
         await conn.commit()
         await ctx.send(embed=success_embed(f"Reset **{member}**'s balance."))
+
+    @commands.command(help="Wipe a member's purchase history so they can buy items again (admin only)")
+    @commands.has_permissions(manage_guild=True)
+    async def resetpurchases(self, ctx: commands.Context, member: discord.Member, *, item: str | None = None):
+        await self._ensure_purchase_log_table()
+        conn = get_conn()
+        if item:
+            item = item.lower().replace(" ", "_")
+            if item not in LUCK_BOOSTERS:
+                await ctx.send(embed=error_embed("That item doesn't exist."))
+                return
+            await conn.execute(
+                "DELETE FROM purchase_log WHERE guild_id = ? AND user_id = ? AND item = ?",
+                (ctx.guild.id, member.id, item),
+            )
+            await conn.commit()
+            await ctx.send(embed=success_embed(f"Reset **{member}**'s purchase count for **{item.replace('_', ' ')}**."))
+        else:
+            await conn.execute(
+                "DELETE FROM purchase_log WHERE guild_id = ? AND user_id = ?",
+                (ctx.guild.id, member.id),
+            )
+            await conn.commit()
+            await ctx.send(embed=success_embed(f"Reset all purchase limits for **{member}**."))
 
     @commands.command(help="Add coins to a member's balance (admin only)")
     @commands.has_permissions(manage_guild=True)
@@ -591,6 +743,15 @@ class Economy(commands.Cog, name="economy"):
         await conn.execute("UPDATE economy SET balance = MAX(balance - ?, 0) WHERE guild_id = ? AND user_id = ?", (amount, ctx.guild.id, member.id))
         await conn.commit()
         await ctx.send(embed=success_embed(f"Removed **{amount}** coins from **{member}**."))
+
+    @commands.command(help="Force-clear a member's active loan (admin only)")
+    @commands.has_permissions(manage_guild=True)
+    async def clearloan(self, ctx: commands.Context, member: discord.Member):
+        await self._ensure_loans_table()
+        conn = get_conn()
+        await conn.execute("DELETE FROM loans WHERE guild_id = ? AND user_id = ?", (ctx.guild.id, member.id))
+        await conn.commit()
+        await ctx.send(embed=success_embed(f"Cleared **{member}**'s loan."))
 
     @commands.hybrid_command(help="Show the richest members in this server")
     async def leaderboard(self, ctx: commands.Context):
